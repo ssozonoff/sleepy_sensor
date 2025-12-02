@@ -4,16 +4,16 @@
 /* ------------------------------ Config -------------------------------- */
 
 #ifndef LORA_FREQ
-  #define LORA_FREQ   915.0
+  #define LORA_FREQ   869.618
 #endif
 #ifndef LORA_BW
-  #define LORA_BW     250
+  #define LORA_BW     62.5
 #endif
 #ifndef LORA_SF
-  #define LORA_SF     10
+  #define LORA_SF     8
 #endif
 #ifndef LORA_CR
-  #define LORA_CR      5
+  #define LORA_CR      8
 #endif
 #ifndef LORA_TX_POWER
   #define LORA_TX_POWER  20
@@ -320,6 +320,12 @@ uint32_t SensorMesh::getDirectRetransmitDelay(const mesh::Packet* packet) {
   uint32_t t = (_radio->getEstAirtimeFor(packet->path_len + packet->payload_len + 2) * _prefs.direct_tx_delay_factor);
   return getRNG()->nextInt(0, 6)*t;
 }
+
+int SensorMesh::getSleepInterval() {
+  if (!_prefs.sleep_interval_secs) return 300;
+  return _prefs.sleep_interval_secs;
+}
+
 int SensorMesh::getInterferenceThreshold() const {
   return _prefs.interference_threshold;
 }

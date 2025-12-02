@@ -1,11 +1,25 @@
 #include "SensorMesh.h"
 
+// State machine
+enum SensorNodeState {
+  SAMPLING,
+  PROCESSING,
+  ADVERTISING,
+  READY_TO_SLEEP,
+  INTERACTIVE_MODE  // Stay awake for configuration/debugging
+};
+
 class LowPowerSensorMesh : public SensorMesh {
 public:
   LowPowerSensorMesh(mesh::MainBoard& board, mesh::Radio& radio,
                      mesh::MillisecondClock& ms, mesh::RNG& rng,
                      mesh::RTCClock& rtc, mesh::MeshTables& tables)
      : SensorMesh(board, radio, ms, rng, rtc, tables) {}
+
+  // Pointer to current state for exit command
+  void setStatePointer(SensorNodeState* state_ptr) {
+    current_state_ptr = state_ptr;
+  }
 
 protected:
   void onSensorDataRead() override {
@@ -19,6 +33,22 @@ protected:
                      MinMaxAvg dest[], int max_num) override {
     return 0; // Not storing series data in low-power mode
   }
+
+  bool handleCustomCommand(uint32_t sender_timestamp, char* command, char* reply) override {
+    if (sender_timestamp == 0 && strcmp(command, "exit") == 0) {
+      if (current_state_ptr && *current_state_ptr == INTERACTIVE_MODE) {
+        *current_state_ptr = READY_TO_SLEEP;
+        strcpy(reply, "Exiting interactive mode, going to sleep...");
+      } else {
+        strcpy(reply, "Not in interactive mode");
+      }
+      return true;
+    }
+    return false;
+  }
+
+private:
+  SensorNodeState* current_state_ptr = nullptr;
 };
 
 StdRNG fast_rng;
@@ -35,21 +65,12 @@ static const uint32_t SAMPLE_INTERVAL_MS = 1000;           // 1 second between s
 static const uint8_t NUM_SAMPLES = 10;                      // Number of samples to collect
 static const uint32_t MAX_AWAKE_TIME_MS = 5 * 60 * 1000;  // 5 minutes max
 
-// State machine
-enum SensorNodeState {
-  SAMPLING,
-  PROCESSING,
-  ADVERTISING,
-  READY_TO_SLEEP,
-  INTERACTIVE_MODE  // Stay awake for configuration/debugging
-};
-
 static SensorNodeState current_state = SAMPLING;
 static uint32_t state_start_time = 0;
 static uint32_t awake_start_time = 0;
 static uint8_t wakeup_count = 0;
 static uint32_t last_interactive_activity = 0;  // Track last command received
-static const uint32_t INTERACTIVE_TIMEOUT_MS = 60 * 1000;  // Exit interactive mode after 60s of inactivity
+static const uint32_t INTERACTIVE_TIMEOUT_MS = 5 * 60 * 1000;  // Exit interactive mode after 60s of inactivity
 
 // Sampling state variables
 static float sensor_samples[NUM_SAMPLES];
@@ -128,6 +149,9 @@ void setup() {
 
   sensors.begin();
   the_mesh.begin(fs);
+
+  // Set state pointer for exit command
+  the_mesh.setStatePointer(&current_state);
 
   // Fall through to loop()
 }
@@ -212,8 +236,7 @@ void loop() {
       digitalWrite(LED_BUILTIN, LOW);
       delay(100);
 
-      uint16_t sleep_interval_secs = 60;  // Hard-coded for testing
-      board.enterLowPowerSleep(sleep_interval_secs);
+      board.enterLowPowerSleep(the_mesh.getSleepInterval());
       // Never returns
       break;
     }
@@ -254,6 +277,7 @@ void loop() {
 
   if (len > 0 && command[len - 1] == '\r') {
     command[len - 1] = 0;
+    
     char reply[160];
     the_mesh.handleCommand(0, command, reply);
     if (reply[0]) {
@@ -261,13 +285,15 @@ void loop() {
     }
     command[0] = 0;
 
-    // Enter interactive mode when a command is received
-    if (current_state != INTERACTIVE_MODE) {
+    // Enter interactive mode when a command is received (unless explicitly exiting)
+    if (current_state != INTERACTIVE_MODE && current_state != READY_TO_SLEEP) {
       MESH_DEBUG_PRINTLN("Command received, entering interactive mode, the sleep mode will resume after 60s of inactivity");
       current_state = INTERACTIVE_MODE;
       state_start_time = now;
     }
-    // Update last activity time
-    last_interactive_activity = now;
+    // Update last activity time (only if not exiting)
+    if (current_state == INTERACTIVE_MODE) {
+      last_interactive_activity = now;
+    }
   }
 }
