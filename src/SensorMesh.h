@@ -73,8 +73,8 @@ public:
   bool formatFileSystem() override;
   void sendSelfAdvertisement(int delay_millis) override;
   void broadcastTelemetry();  // Broadcast sensor data via group message
-  void updateAdvertTimer() override;
-  void updateFloodAdvertTimer() override;
+  void updateAdvertTimer() override { /* Empty stub - time-based ads removed for sleeping nodes */ }
+  void updateFloodAdvertTimer() override { /* Empty stub - time-based ads removed for sleeping nodes */ }
   void setLoggingOn(bool enable) override {  }
   void eraseLogFile() override { }
   void dumpLogFile() override { }
@@ -137,14 +137,14 @@ protected:
   // sendAckTo() removed - alert system not compatible with sleeping nodes
 private:
   FILESYSTEM* _fs;
-  unsigned long next_local_advert, next_flood_advert;
+  // next_local_advert, next_flood_advert removed - time-based ads incompatible with sleeping nodes
   NodePrefs _prefs;
   CommonCLI _cli;
   uint8_t reply_data[MAX_PACKET_PAYLOAD];
   ClientACL  acl;
   // dirty_contacts_expiry removed - ACL changes saved immediately for sleeping nodes
   CayenneLPP telemetry;
-  uint32_t last_read_time;
+  // last_read_time removed - sensor reading handled by main.cpp state machine for sleeping nodes
   int matching_peer_indexes[MAX_SEARCH_RESULTS];
   // num_alert_tasks and alert_tasks removed - alert system not compatible with sleeping nodes
   // set_radio_at, revert_radio_at, pending_* removed - temp radio params not compatible with sleeping nodes

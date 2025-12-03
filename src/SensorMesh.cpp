@@ -41,10 +41,6 @@
   #define TXT_ACK_DELAY     200
 #endif
 
-#ifndef SENSOR_READ_INTERVAL_SECS
-  #define SENSOR_READ_INTERVAL_SECS  60
-#endif
-
 /* ------------------------------ Code -------------------------------- */
 
 #define FIRMWARE_VER_LEVEL       1
@@ -59,9 +55,6 @@
 #define RESP_SERVER_LOGIN_OK      0   // response to ANON_REQ
 
 #define CLI_REPLY_DELAY_MILLIS  1000
-
-// LAZY_CONTACTS_WRITE_DELAY removed - ACL changes saved immediately for sleeping nodes
-// ALERT_ACK_EXPIRY_MILLIS removed - alert system not compatible with sleeping nodes
 
 static File openAppend(FILESYSTEM* _fs, const char* fname) {
   #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -243,10 +236,6 @@ mesh::Packet* SensorMesh::createSelfAdvert() {
 
   return createAdvert(self_id, app_data, app_data_len);
 }
-
-// sendAlert() method removed - alert system not compatible with sleeping nodes
-
-// alertIf() method removed - alert system not compatible with sleeping nodes
 
 float SensorMesh::getAirtimeBudgetFactor() const {
   return _prefs.airtime_factor;
@@ -704,11 +693,7 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
      : mesh::Mesh(radio, ms, rng, rtc, *new StaticPoolPacketManager(32), tables),
       _cli(board, rtc, sensors, &_prefs, this), telemetry(MAX_PACKET_PAYLOAD - 4)
 {
-  next_local_advert = next_flood_advert = 0;
-  // dirty_contacts_expiry = 0;  // Lazy write timer removed for sleeping nodes
-  last_read_time = 0;
-  // num_alert_tasks = 0;  // Alert system removed for sleeping nodes
-  // set_radio_at = revert_radio_at = 0;  // Temp radio params removed for sleeping nodes
+  // next_local_advert, next_flood_advert initialization removed - time-based ads removed
   zone_name[0] = 0;  // Initialize zone name as empty
 
   // defaults
@@ -726,8 +711,7 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
   _prefs.bw = LORA_BW;
   _prefs.cr = LORA_CR;
   _prefs.tx_power_dbm = LORA_TX_POWER;
-  _prefs.advert_interval = 1;  // default to 2 minutes for NEW installs
-  _prefs.flood_advert_interval = 0;   // disabled
+  // advert_interval, flood_advert_interval removed - time-based ads removed for sleeping nodes
   _prefs.disable_fwd = true;
   _prefs.flood_max = 64;
   _prefs.interference_threshold = 0;  // disabled
@@ -756,8 +740,7 @@ void SensorMesh::begin(FILESYSTEM* fs) {
   radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_set_tx_power(_prefs.tx_power_dbm);
 
-  updateAdvertTimer();
-  updateFloodAdvertTimer();
+  // updateAdvertTimer() and updateFloodAdvertTimer() removed - time-based ads removed
 
 #if ENV_INCLUDE_GPS == 1
   applyGpsPrefs();
@@ -866,20 +849,7 @@ void SensorMesh::broadcastTelemetry() {
   }
 }
 
-void SensorMesh::updateAdvertTimer() {
-  if (_prefs.advert_interval > 0) {  // schedule local advert timer
-    next_local_advert = futureMillis( ((uint32_t)_prefs.advert_interval) * 2 * 60 * 1000);
-  } else {
-    next_local_advert = 0;  // stop the timer
-  }
-}
-void SensorMesh::updateFloodAdvertTimer() {
-  if (_prefs.flood_advert_interval > 0) {  // schedule flood advert timer
-    next_flood_advert = futureMillis( ((uint32_t)_prefs.flood_advert_interval) * 60 * 60 * 1000);
-  } else {
-    next_flood_advert = 0;  // stop the timer
-  }
-}
+// updateAdvertTimer() and updateFloodAdvertTimer() removed - time-based ads removed for sleeping nodes
 
 void SensorMesh::setTxPower(uint8_t power_dbm) {
   radio_set_tx_power(power_dbm);
@@ -932,33 +902,11 @@ bool  SensorMesh::getGPS(uint8_t channel, float& lat, float& lon, float& alt) {
 void SensorMesh::loop() {
   mesh::Mesh::loop();
 
-  if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
-    mesh::Packet* pkt = createSelfAdvert();
-    if (pkt) sendFlood(pkt);
-
-    updateFloodAdvertTimer();   // schedule next flood advert
-    updateAdvertTimer();   // also schedule local advert (so they don't overlap)
-  } else if (next_local_advert && millisHasNowPassed(next_local_advert)) {
-    mesh::Packet* pkt = createSelfAdvert();
-    if (pkt) sendZeroHop(pkt);
-
-    updateAdvertTimer();   // schedule next local advert
-  }
+  // Time-based advertisement removed - sleeping nodes use wakeup counter in main.cpp
 
   // Temporary radio params timer handling removed - not compatible with sleeping nodes
 
-  //TODO: Do we still need this, does it make sense?
-  uint32_t curr = getRTCClock()->getCurrentTime();
-  if (curr >= last_read_time + SENSOR_READ_INTERVAL_SECS) {
-    telemetry.reset();
-    telemetry.addVoltage(TELEM_CHANNEL_SELF, (float)board.getBattMilliVolts() / 1000.0f);
-    // query other sensors -- target specific
-    sensors.querySensors(0xFF, telemetry);  // allow all telemetry permissions
-
-    onSensorDataRead();
-
-    last_read_time = curr;
-  }
+  // Sensor reading removed from loop() - main.cpp handles sampling via state machine for sleeping nodes
 
   // Alert system removed for low-power sleeping nodes
   // Sleeping nodes are primarily telemetry broadcasters, not interactive
