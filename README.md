@@ -1,6 +1,18 @@
-# Low-Power Sleeping Sensor for RAK4631 + DS3231 RTC
+# Ultra-Low-Power Sleeping Sensor for RAK4631 + DS3231 RTC
 
-This firmware provides a foundation for building ultra-low-power sensor nodes using the RAK4631 WisBlock Core module with a DS3231 RTC module for timed wake-up.
+This firmware is specifically optimized for **battery-powered sensor nodes** that sleep between measurements to maximize battery life. It uses the RAK4631 WisBlock Core module with a DS3231 RTC for timed wake-up, achieving ultra-low sleep current (~0.4µA) for months of operation on a single battery charge.
+
+## Design Philosophy: Sleep-First Architecture
+
+This firmware has been carefully optimized by **removing features incompatible with sleep/wake cycles** and implementing sleep-aware alternatives. Every design decision prioritizes power efficiency and reliability for nodes that spend >99% of their time asleep.
+
+**Key Optimizations:**
+- **Removed alert system** - retries and acknowledgments incompatible with sleeping nodes
+- **Removed time-based advertisements** - replaced with wakeup counter-based periodic ads
+- **Removed temporary radio parameters** - not suitable for nodes that reset on wake
+- **Immediate ACL writes** - no lazy writes that could be lost during sleep
+- **Added private channel support** - encrypted telemetry broadcasts for secure sensor data
+- **Added zone-based broadcasting** - transport codes for selective routing and reduced congestion
 
 ## Architecture Overview
 
@@ -47,7 +59,7 @@ The firmware uses a **state machine architecture** that keeps the device awake d
               ┌────────────────┐
               │ INTERACTIVE    │ ◄─── Command received?
               │     MODE       │      Stay awake, no sleep
-              └────────────────┘      60s inactivity timeout
+              └────────────────┘      5min inactivity timeout
 ```
 
 ### Key Features
@@ -57,9 +69,36 @@ The firmware uses a **state machine architecture** that keeps the device awake d
 - **State machine**: Clean separation of concerns (SAMPLING → PROCESSING → ADVERTISING → SLEEP)
 - **Multi-sample averaging**: Configurable sample count and timing
 - **Separate lifecycles**: Telemetry sent every wake, advertisements sent periodically
+- **Private channel support**: AES-encrypted telemetry broadcasts for secure sensor data
+- **Zone-based broadcasting**: Transport codes for selective routing and reduced network congestion
 - **Interactive mode**: Automatic entry when commands received, stays awake for configuration
 - **Configurable parameters**: Sample interval, sample count, sleep duration all configurable
 - **Safety timeouts**: 5-minute max awake time (except in interactive mode)
+- **Immediate persistence**: All configuration changes saved immediately to prevent data loss
+
+### Features Removed for Sleep Optimization
+
+To maximize reliability and power efficiency for sleeping nodes, the following features have been intentionally removed:
+
+**Alert System (with retries and acknowledgments)**
+- **Why removed**: Alerts require persistent connections and retry logic that are incompatible with nodes that sleep between wake cycles. Acknowledgments cannot be reliably received when the sender is asleep.
+- **Alternative**: Implement application-level notifications at the receiver/gateway side based on received telemetry data.
+
+**Time-Based Advertisements**
+- **Why removed**: Time-based scheduling requires continuous operation and is unreliable when nodes wake at irregular intervals.
+- **Alternative**: Wakeup counter-based advertisements - advertise every N wakeups (e.g., advertise on every 12th wakeup).
+
+**Temporary Radio Parameters**
+- **Why removed**: Temporary radio configurations are lost when the node enters system-off sleep mode and the CPU resets on wake.
+- **Alternative**: Use permanent configuration via preferences that persist across sleep cycles.
+
+**ACL Lazy Writes**
+- **Why removed**: Delayed writes to flash increase the risk of data loss if the node enters sleep before the write completes.
+- **Alternative**: Immediate writes to flash ensure configuration changes are persisted before sleep.
+
+**Neighbor Tracking and Time Series Logging**
+- **Why removed**: These features require continuous operation and significant RAM/flash resources that are wasted on nodes that only wake briefly.
+- **Alternative**: Simple multi-sample averaging during wake cycles, with raw telemetry sent to gateway for storage and analysis.
 
 ## Hardware Requirements
 
@@ -78,13 +117,13 @@ The firmware uses a **state machine architecture** that keeps the device awake d
 
 ## Configuration Constants
 
-The following constants can be adjusted in `main.cpp` (lines 33-36):
+The following constants can be adjusted in [main.cpp:204-206](src/main.cpp#L204-L206):
 
 ```cpp
-static const uint32_t SAMPLE_INTERVAL_MS = 1000;           // 1 second between samples
-static const uint8_t NUM_SAMPLES = 10;                      // Number of samples to collect
-static const uint32_t MAX_AWAKE_TIME_MS = 5 * 60 * 1000;  // 5 minutes max awake time
-static const uint32_t INTERACTIVE_TIMEOUT_MS = 60 * 1000;  // 60s interactive mode timeout
+static const uint32_t SAMPLE_INTERVAL_MS = 1000;            // 1 second between samples
+static const uint8_t NUM_SAMPLES = 10;                       // Number of samples to collect
+static const uint32_t MAX_AWAKE_TIME_MS = 5 * 60 * 1000;   // 5 minutes max awake time
+static const uint32_t INTERACTIVE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes interactive timeout
 ```
 
 **Future**: These will be moved to node preferences for runtime configuration via serial commands.
@@ -120,8 +159,8 @@ static const uint32_t INTERACTIVE_TIMEOUT_MS = 60 * 1000;  // 60s interactive mo
 - Node stays awake indefinitely
 - All loops remain active (mesh, sensors, serial)
 - Can send multiple commands
-- Each command resets 60-second inactivity timer
-- After 60s of no activity → transitions to READY_TO_SLEEP
+- Each command resets 5-minute inactivity timer
+- After 5 minutes of no activity → transitions to READY_TO_SLEEP
 
 **Use cases**:
 - Configuration/debugging
@@ -129,7 +168,7 @@ static const uint32_t INTERACTIVE_TIMEOUT_MS = 60 * 1000;  // 60s interactive mo
 - Firmware updates via serial
 - Manual mesh operations
 
-**Exit**: Automatic after 60s inactivity, or manual via sleep command
+**Exit**: Automatic after 5 minutes of inactivity, or manual via `exit` command
 
 ## Telemetry vs Advertisement Lifecycles
 
@@ -140,16 +179,19 @@ This firmware implements **separate lifecycles** for telemetry and advertisement
 - **Frequency**: Every wake cycle (e.g., every 60 seconds)
 - **Content**: Sensor readings (battery voltage, temperature, etc.)
 - **Format**: CayenneLPP via group messages
+- **Encryption**: Can be public or AES-encrypted via private channels
+- **Routing**: Can use zones (transport codes) for selective forwarding
 - **Purpose**: Continuous data reporting
 
 ### Self-Advertisement (Periodic)
 
 - **Frequency**: Based on `wakeups_per_advert` counter
 - **Content**: Node identity, timestamp, name
+- **Encryption**: Always unencrypted (public)
 - **Purpose**: Mesh network presence, discovery, routing
 - **Example**: If `wakeups_per_advert = 12` and wake every 60s → advertise every 12 minutes
 
-**Rationale**: Sensor data needs to be transmitted frequently, but advertisements (which help establish mesh routing) only need to happen occasionally.
+**Rationale**: Sensor data needs to be transmitted frequently and can be encrypted/routed selectively, but advertisements (which help establish mesh routing) only need to happen occasionally and must remain public for network discovery.
 
 ## Building and Uploading
 
@@ -182,7 +224,53 @@ sleep set 60          # Wake every 60 seconds
 advert set 12         # Advertise every 12 wakeups (12 minutes)
 ```
 
-### Zone Configuration
+### Private Channel Configuration (Encrypted Telemetry)
+
+Private channels enable **AES-encrypted telemetry broadcasts** to secure sensor data in untrusted environments. This is ideal for sensitive measurements or multi-tenant deployments.
+
+```
+channel set <psk_base64>   - Enable private channel with base64-encoded PSK (16 or 32 bytes)
+channel clear              - Disable private channel (revert to public broadcast)
+channel status             - Show current channel status
+```
+
+**PSK Requirements:**
+- Must be base64-encoded
+- Supports 128-bit (16 bytes) or 256-bit (32 bytes) keys
+- Same PSK must be configured on all nodes and gateways that need to communicate
+
+**Generating a PSK:**
+```bash
+# Generate 128-bit (16-byte) random key and encode as base64
+openssl rand -base64 16
+
+# Generate 256-bit (32-byte) random key and encode as base64
+openssl rand -base64 32
+```
+
+**Example Configuration:**
+```bash
+# Enable private channel with 256-bit encryption
+channel set m3JKxnP0dF8kL2mN5qR9sT1vU7wX3yZ6aC4eG8hJ0lM=
+
+# Check status
+channel status
+# Output: Private channel: enabled (hash: A5B2C3D4...)
+
+# Disable encryption
+channel clear
+# Output: Private channel disabled (public broadcast)
+```
+
+**Security Notes:**
+- Private channel PSK is **persisted to flash** and survives reboots
+- All nodes sharing the same PSK can decrypt each other's telemetry
+- Gateway/receiver nodes must be configured with the same PSK to decrypt data
+- PSK is stored in plaintext in flash - physical security is required
+
+### Zone Configuration (Selective Routing)
+
+Zones use **transport codes** to enable selective packet forwarding, reducing network congestion by limiting which repeaters forward your packets.
 
 ```
 zone set <name>       - Set transport code zone for filtering
@@ -190,7 +278,36 @@ zone clear            - Clear zone (standard flood)
 zone status           - Show current zone configuration
 ```
 
-Zones use transport codes to limit which repeaters forward packets, reducing network congestion.
+**How Zones Work:**
+1. Sensor node sets a zone name (e.g., "building-a", "sensor", "floor-2")
+2. Packets are tagged with a transport code derived from the zone name
+3. Only repeaters configured with matching zones will forward the packets
+4. Reduces unnecessary retransmissions and interference
+
+**Example:**
+```bash
+# Configure sensor to use "building-a" zone
+zone set building-a
+
+# Check status
+zone status
+# Output: Zone: building-a (transport code: 0x1A2B)
+
+# Revert to standard flooding (all repeaters forward)
+zone clear
+# Output: Zone cleared (standard flood)
+```
+
+**Use Cases:**
+- **Multi-building deployments**: Separate "building-a", "building-b" zones
+- **Floor-based routing**: "floor-1", "floor-2", "floor-3" zones
+- **Device type filtering**: "sensor", "actuator", "gateway" zones
+- **Tenant isolation**: "tenant-1", "tenant-2" in multi-tenant setups
+
+**Configuration:**
+- Zone name is **persisted to flash** and survives reboots
+- Default zone: `sensor` (can be changed in firmware or via commands)
+- Repeaters must be configured with matching zones to forward packets
 
 ## Power Consumption
 
@@ -240,7 +357,7 @@ enum SensorNodeState {
    - Does NOT apply in interactive mode
    - Prevents battery drain from bugs
 
-2. **Inactivity timeout**: Interactive mode exits after 60s of no commands
+2. **Inactivity timeout**: Interactive mode exits after 5 minutes of no commands
    - Automatic return to normal operation
    - Prevents accidentally leaving node awake
 
@@ -369,12 +486,41 @@ case WARMING_UP: {
 
 ## Future Enhancements
 
-1. **Runtime configuration**: Move constants to node preferences
-2. **Multi-zone broadcasting**: Broadcast to multiple zones simultaneously
-3. **Adaptive sampling**: Adjust sample rate based on sensor variance
-4. **Low battery mode**: Reduce wake frequency when battery low
-5. **Sensor warmup state**: Built-in support for sensors requiring warmup time
-6. **Data buffering**: Store multiple telemetry readings when mesh unavailable
+1. **Runtime configuration**: Move sampling constants (interval, count, timeouts) to node preferences for configuration via serial commands
+2. **Adaptive sampling**: Adjust sample rate based on sensor variance (e.g., sample more frequently when temperature changing rapidly)
+3. **Low battery mode**: Reduce wake frequency and disable non-critical features when battery below threshold
+4. **Sensor warmup state**: Built-in support for sensors requiring warmup time (e.g., gas sensors, CO2 sensors)
+5. **Data buffering with retry**: Store multiple telemetry readings in flash when mesh unavailable, transmit on next successful wake
+6. **Conditional telemetry**: Only transmit when sensor values change beyond a threshold to reduce airtime
+7. **Multi-zone broadcasting**: Broadcast to multiple zones simultaneously for redundant routing
+8. **Configurable encryption**: Runtime PSK configuration without hardcoding, with key rotation support
+
+## Security Considerations
+
+### Private Channels
+- PSK is stored in **plaintext in flash** - physical device security is critical
+- Use 256-bit keys (32 bytes) for maximum security
+- Rotate keys periodically, especially if devices are lost or compromised
+- Keep PSK secret and use secure channels for distribution to nodes/gateways
+
+### Zone-Based Routing
+- Zones provide **routing isolation**, not security/encryption
+- Zone names are public and can be observed by network monitoring
+- Use descriptive but non-sensitive zone names (avoid "vault", "sensitive-lab", etc.)
+- Combine zones with private channels for both routing control and data security
+
+### Physical Security
+- Nodes contain cryptographic material (identity keys, PSKs)
+- If device is physically compromised, assume all keys are compromised
+- Consider tamper-evident enclosures for high-security deployments
+- Use secure boot/flash encryption on platforms that support it
+
+### Best Practices
+1. **Defense in depth**: Use both private channels AND zones for maximum security
+2. **Key management**: Maintain a secure registry of PSKs and which nodes use them
+3. **Network segmentation**: Use different PSKs for different security zones
+4. **Monitoring**: Log and monitor telemetry at gateways for anomalies
+5. **Battery monitoring**: Low battery can indicate theft or tampering
 
 ## Resources
 
