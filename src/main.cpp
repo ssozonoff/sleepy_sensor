@@ -101,6 +101,11 @@ void broadcastApplicationTelemetry() {
   // === APPLICATION TELEMETRY ===
   // CUSTOMIZE THIS SECTION - Add your sensor readings here
 
+  // EXAMPLE
+  // as an example this will add any data from currently supported sensors (EnvironmentSensorManager) to the CayenneLPP packet.
+  // since this is a push bashed sensor the permissions byte is irrelevant so enable all permissions
+  sensors.querySensors(0xFF, telemetry);
+
   // Example 1: I2C Temperature/Humidity Sensor (BME280, SHT31, etc.)
   // if (bme_initialized) {
   //   float temp = bme.readTemperature();
@@ -157,26 +162,36 @@ void broadcastApplicationTelemetry() {
   memcpy(&temp[offset], telemetry.getBuffer(), telem_len);
   offset += telemetry.getSize();
 
-  // Create public group datagram
-  mesh::GroupChannel public_channel;
-  memset(public_channel.hash, 0, sizeof(public_channel.hash));
-  memset(public_channel.secret, 0, sizeof(public_channel.secret));
+  // Select channel: private if configured, otherwise public
+  mesh::GroupChannel* channel;
+  const char* channel_type;
+  if (the_mesh.hasPrivateChannel()) {
+    channel = (mesh::GroupChannel*)&the_mesh.getPrivateChannel();
+    channel_type = "ENCRYPTED";
+  } else {
+    // Use public channel (all zeros)
+    static mesh::GroupChannel public_channel;
+    memset(public_channel.hash, 0, sizeof(public_channel.hash));
+    memset(public_channel.secret, 0, sizeof(public_channel.secret));
+    channel = &public_channel;
+    channel_type = "PUBLIC";
+  }
 
   auto pkt = the_mesh.createGroupDatagram(PAYLOAD_TYPE_GRP_DATA,
-                                          public_channel, temp, offset);
+                                          *channel, temp, offset);
 
   if (pkt) {
     // Use broadcast zone if configured, otherwise standard flood
     const char* zone = the_mesh.getBroadcastZoneName();
     if (zone == NULL) {
       the_mesh.sendFlood(pkt);
-      MESH_DEBUG_PRINTLN("Telemetry broadcast (%d bytes) - standard flood", telem_len);
+      MESH_DEBUG_PRINTLN("Telemetry broadcast (%d bytes, %s) - standard flood", telem_len, channel_type);
     } else {
       uint16_t codes[2];
       codes[0] = the_mesh.getBroadcastZone().calcTransportCode(pkt);
       codes[1] = 0;
       the_mesh.sendFlood(pkt, codes);
-      MESH_DEBUG_PRINTLN("Telemetry broadcast (%d bytes) - zone: %s", telem_len, zone);
+      MESH_DEBUG_PRINTLN("Telemetry broadcast (%d bytes, %s) - zone: %s", telem_len, channel_type, zone);
     }
   } else {
     MESH_DEBUG_PRINTLN("ERROR: unable to create telemetry packet!");

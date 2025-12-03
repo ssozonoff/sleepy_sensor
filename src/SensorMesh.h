@@ -100,6 +100,13 @@ public:
   const char* getBroadcastZoneName() const;         // Get current zone name (NULL if disabled)
   const TransportKey& getBroadcastZone() const { return broadcast_zone; }  // Get broadcast zone for transport codes
 
+  // Private channel management for encrypted telemetry
+  // Private channels use AES encryption to secure sensor data broadcasts
+  void setPrivateChannel(const char* psk_base64);   // Configure private channel from base64 PSK (16 or 32 bytes)
+  void clearPrivateChannel();                       // Disable private channel, revert to public broadcast
+  bool hasPrivateChannel() const { return private_channel_enabled; }  // Check if private channel is configured
+  const mesh::GroupChannel& getPrivateChannel() const { return private_channel; }  // Get private channel
+
 protected:
   // current telemetry data queries
   float getVoltage(uint8_t channel) { return getTelemValue(channel, LPP_VOLTAGE); }
@@ -152,6 +159,10 @@ private:
   // Transport code support for zone-based broadcasting
   TransportKey broadcast_zone;
   char zone_name[32];
+
+  // Private channel for encrypted telemetry broadcasts
+  mesh::GroupChannel private_channel;
+  bool private_channel_enabled;
 
   uint8_t handleLoginReq(const mesh::Identity& sender, const uint8_t* secret, uint32_t sender_timestamp, const uint8_t* data);
   uint8_t handleRequest(uint8_t perms, uint32_t sender_timestamp, uint8_t req_type, uint8_t* payload, size_t payload_len);

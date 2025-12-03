@@ -1,5 +1,6 @@
 #include "SensorMesh.h"
 #include <SHA256.h>
+#include <base64.hpp>
 
 /* ------------------------------ Config -------------------------------- */
 
@@ -416,6 +417,48 @@ void SensorMesh::handleCommand(uint32_t sender_timestamp, char* command, char* r
     } else {
       strcpy(reply, "Usage: zone set <name> | zone clear | zone status");
     }
+  } else if (memcmp(command, "channel ", 8) == 0) {  // private channel management commands
+    const char* subcmd = &command[8];
+
+    if (memcmp(subcmd, "set ", 4) == 0) {
+      // channel set <psk_base64>
+      const char* psk_arg = &subcmd[4];
+      if (strlen(psk_arg) == 0) {
+        strcpy(reply, "Err - PSK required (base64-encoded 16 or 32 bytes)");
+      } else if (strlen(psk_arg) >= sizeof(_prefs.private_channel_psk)) {
+        strcpy(reply, "Err - PSK too long (max 47 chars)");
+      } else {
+        // Attempt to set private channel (validates PSK internally)
+        int len_before = strlen(_prefs.private_channel_psk);
+        setPrivateChannel(psk_arg);
+
+        if (private_channel_enabled) {
+          // Extract key length from preferences (decode to check)
+          uint8_t temp[32];
+          int decoded_len = decode_base64((unsigned char*)_prefs.private_channel_psk,
+                                          strlen(_prefs.private_channel_psk), temp);
+          sprintf(reply, "Private channel enabled (%d-bit key)", decoded_len * 8);
+        } else {
+          strcpy(reply, "Err - Invalid PSK (must be base64-encoded 16 or 32 bytes)");
+        }
+      }
+    } else if (strcmp(subcmd, "clear") == 0) {
+      // channel clear
+      clearPrivateChannel();
+      strcpy(reply, "Private channel disabled (public broadcast)");
+    } else if (strcmp(subcmd, "status") == 0 || strcmp(subcmd, "info") == 0) {
+      // channel status
+      if (private_channel_enabled) {
+        // Show hash prefix for verification (first 4 bytes in hex)
+        sprintf(reply, "Private channel: enabled (hash: %02X%02X%02X%02X...)",
+                private_channel.hash[0], private_channel.hash[1],
+                private_channel.hash[2], private_channel.hash[3]);
+      } else {
+        strcpy(reply, "Private channel: disabled (public broadcast)");
+      }
+    } else {
+      strcpy(reply, "Usage: channel set <psk_base64> | channel clear | channel status");
+    }
   } else if (memcmp(command, "sleep ", 6) == 0) {  // sleep interval commands
     const char* subcmd = &command[6];
 
@@ -727,6 +770,11 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
 
   // Transport code zone defaults
   StrHelper::strncpy(_prefs.broadcast_zone_name, DEFAULT_BROADCAST_ZONE, sizeof(_prefs.broadcast_zone_name));
+
+  // Private channel defaults
+  _prefs.private_channel_psk[0] = 0;  // No private channel by default
+  private_channel_enabled = false;
+  memset(&private_channel, 0, sizeof(private_channel));
 }
 
 void SensorMesh::begin(FILESYSTEM* fs) {
@@ -754,6 +802,15 @@ void SensorMesh::begin(FILESYSTEM* fs) {
   } else {
     clearBroadcastZone();
     MESH_DEBUG_PRINTLN("No persisted zone, using standard flood");
+  }
+
+  // Load persisted private channel from preferences
+  if (strlen(_prefs.private_channel_psk) > 0) {
+    setPrivateChannel(_prefs.private_channel_psk);
+    MESH_DEBUG_PRINTLN("Loaded private channel from preferences");
+  } else {
+    clearPrivateChannel();
+    MESH_DEBUG_PRINTLN("No private channel configured, using public broadcast");
   }
 }
 
@@ -823,26 +880,36 @@ void SensorMesh::broadcastTelemetry() {
   // Copy telemetry data
   memcpy(&temp[5], telemetry.getBuffer(), telem_len);
 
-  // Create public group datagram (using default public channel)
-  mesh::GroupChannel public_channel;
-  memset(public_channel.hash, 0, sizeof(public_channel.hash));  // Public channel hash
-  memset(public_channel.secret, 0, sizeof(public_channel.secret));  // Public key (all zeros)
+  // Select channel: private if configured, otherwise public
+  mesh::GroupChannel* channel;
+  const char* channel_type;
+  if (private_channel_enabled) {
+    channel = &private_channel;
+    channel_type = "ENCRYPTED";
+  } else {
+    // Use public channel (all zeros)
+    static mesh::GroupChannel public_channel;
+    memset(public_channel.hash, 0, sizeof(public_channel.hash));
+    memset(public_channel.secret, 0, sizeof(public_channel.secret));
+    channel = &public_channel;
+    channel_type = "PUBLIC";
+  }
 
-  auto pkt = createGroupDatagram(PAYLOAD_TYPE_GRP_DATA, public_channel, temp, 5 + telem_len);
+  auto pkt = createGroupDatagram(PAYLOAD_TYPE_GRP_DATA, *channel, temp, 5 + telem_len);
 
   if (pkt) {
     // Use transport codes if broadcast zone is configured
     if (broadcast_zone.isNull()) {
       // No zone configured - use standard flood (backward compatible)
       sendFlood(pkt);
-      MESH_DEBUG_PRINTLN("Telemetry broadcast (%d bytes) - standard flood", telem_len);
+      MESH_DEBUG_PRINTLN("Telemetry broadcast (%d bytes, %s) - standard flood", telem_len, channel_type);
     } else {
       // Zone configured - use transport codes for zone-based routing
       uint16_t codes[2];
       codes[0] = broadcast_zone.calcTransportCode(pkt);
-      codes[1] = 0;  // 
+      codes[1] = 0;  //
       sendFlood(pkt, codes);
-      MESH_DEBUG_PRINTLN("Telemetry broadcast (%d bytes) - zone: %s", telem_len, zone_name);
+      MESH_DEBUG_PRINTLN("Telemetry broadcast (%d bytes, %s) - zone: %s", telem_len, channel_type, zone_name);
     }
   } else {
     MESH_DEBUG_PRINTLN("ERROR: unable to create telemetry packet!");
@@ -981,6 +1048,63 @@ void SensorMesh::clearBroadcastZone() {
   savePrefs();  // Save to filesystem
 
   MESH_DEBUG_PRINTLN("Broadcast zone cleared (using standard flood, persisted)");
+}
+
+/* ==================== Private Channel Management ====================
+ *
+ * Private channels use AES encryption to secure sensor telemetry broadcasts.
+ * Only receivers with the correct pre-shared key (PSK) can decrypt the data.
+ *
+ * HOW IT WORKS:
+ * 1. PSK is base64-encoded (16 or 32 bytes for AES-128/256)
+ * 2. Decode base64 → store as channel.secret
+ * 3. Compute SHA-256 hash of secret → channel.hash (for identification)
+ * 4. MeshCore handles AES encryption transparently during broadcast
+ *
+ * ======================================================================== */
+
+void SensorMesh::setPrivateChannel(const char* psk_base64) {
+  if (psk_base64 == NULL || strlen(psk_base64) == 0) {
+    clearPrivateChannel();
+    return;
+  }
+
+  // Decode base64 PSK (following BaseChatMesh::addChannel pattern)
+  memset(private_channel.secret, 0, sizeof(private_channel.secret));
+  int decoded_len = decode_base64((unsigned char*)psk_base64, strlen(psk_base64),
+                                   private_channel.secret);
+
+  // Validate PSK length (must be 16 or 32 bytes for AES-128/256)
+  if (decoded_len != 16 && decoded_len != 32) {
+    MESH_DEBUG_PRINTLN("ERROR: Invalid PSK length (%d bytes). Must be 16 or 32 bytes.", decoded_len);
+    clearPrivateChannel();
+    return;
+  }
+
+  // Compute SHA-256 hash of secret (for channel identification)
+  mesh::Utils::sha256(private_channel.hash, sizeof(private_channel.hash),
+                      private_channel.secret, decoded_len);
+
+  // Enable private channel
+  private_channel_enabled = true;
+
+  // Persist to preferences
+  strncpy(_prefs.private_channel_psk, psk_base64, sizeof(_prefs.private_channel_psk) - 1);
+  _prefs.private_channel_psk[sizeof(_prefs.private_channel_psk) - 1] = 0;
+  savePrefs();  // Save to filesystem
+
+  MESH_DEBUG_PRINTLN("Private channel enabled (%d-bit key, persisted)", decoded_len * 8);
+}
+
+void SensorMesh::clearPrivateChannel() {
+  private_channel_enabled = false;
+  memset(&private_channel, 0, sizeof(private_channel));
+
+  // Persist cleared state to preferences
+  _prefs.private_channel_psk[0] = 0;
+  savePrefs();  // Save to filesystem
+
+  MESH_DEBUG_PRINTLN("Private channel disabled (using public broadcast, persisted)");
 }
 
 const char* SensorMesh::getBroadcastZoneName() const {
