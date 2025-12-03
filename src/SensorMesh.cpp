@@ -165,55 +165,7 @@ static uint8_t putFloat(uint8_t * dest, float value, uint8_t size, uint32_t mult
 }
 
 uint8_t SensorMesh::handleRequest(uint8_t perms, uint32_t sender_timestamp, uint8_t req_type, uint8_t* payload, size_t payload_len) {
-  memcpy(reply_data, &sender_timestamp, 4);   // reflect sender_timestamp back in response packet (kind of like a 'tag')
-
-  if (req_type == REQ_TYPE_GET_TELEMETRY_DATA) {  // allow all
-    uint8_t perm_mask = ~(payload[0]);    // NEW: first reserved byte (of 4), is now inverse mask to apply to permissions
-
-    telemetry.reset();
-    telemetry.addVoltage(TELEM_CHANNEL_SELF, (float)board.getBattMilliVolts() / 1000.0f);
-    // query other sensors -- target specific
-    sensors.querySensors(0xFF & perm_mask, telemetry);  // allow all telemetry permissions for admin or guest
-    // TODO: let requester know permissions they have:  telemetry.addPresence(TELEM_CHANNEL_SELF, perms);
-
-    uint8_t tlen = telemetry.getSize();
-    memcpy(&reply_data[4], telemetry.getBuffer(), tlen);
-    return 4 + tlen;  // reply_len
-  }
-  if (req_type == REQ_TYPE_GET_AVG_MIN_MAX && (perms & PERM_ACL_ROLE_MASK) >= PERM_ACL_READ_ONLY) {
-    uint32_t start_secs_ago, end_secs_ago;
-    memcpy(&start_secs_ago, &payload[0], 4);
-    memcpy(&end_secs_ago, &payload[4], 4);
-    uint8_t res1 = payload[8];   // reserved for future  (extra query params)
-    uint8_t res2 = payload[9];
-
-    MinMaxAvg data[8];
-    int n;
-    if (res1 == 0 && res2 == 0) {
-      n = querySeriesData(start_secs_ago, end_secs_ago, data, 8);
-    } else {
-      n = 0;
-    }
-
-    uint8_t ofs = 4;
-    {
-      uint32_t now = getRTCClock()->getCurrentTime();
-      memcpy(&reply_data[ofs], &now, 4); ofs += 4;
-    }
-
-    for (int i = 0; i < n; i++) {
-      auto d = &data[i];
-      reply_data[ofs++] = d->_channel;
-      reply_data[ofs++] = d->_lpp_type;
-      uint8_t sz = getDataSize(d->_lpp_type);
-      uint32_t mult = getMultiplier(d->_lpp_type);
-      bool is_signed = isSigned(d->_lpp_type);
-      ofs += putFloat(&reply_data[ofs], d->_min, sz, mult, is_signed);
-      ofs += putFloat(&reply_data[ofs], d->_max, sz, mult, is_signed);
-      ofs += putFloat(&reply_data[ofs], d->_avg, sz, mult, is_signed);
-    }
-    return ofs;
-  }
+  memcpy(reply_data, &sender_timestamp, 4);   // reflect sender_timestamp back in response packet (kind of like a 'tag')  
   if (req_type == REQ_TYPE_GET_ACCESS_LIST && (perms & PERM_ACL_ROLE_MASK) == PERM_ACL_ADMIN) {
     uint8_t res1 = payload[0];   // reserved for future  (extra query params)
     uint8_t res2 = payload[1];
@@ -243,9 +195,7 @@ float SensorMesh::getAirtimeBudgetFactor() const {
 }
 
 bool SensorMesh::allowPacketForward(const mesh::Packet* packet) {
-  if (_prefs.disable_fwd) return false;
-  if (packet->isRouteFlood() && packet->path_len >= _prefs.flood_max) return false;
-  return true;
+  return false;
 }
 
 int SensorMesh::calcRxDelay(float score, uint32_t air_time) const {
@@ -552,8 +502,6 @@ void SensorMesh::getPeerSharedSecret(uint8_t* dest_secret, int peer_idx) {
   }
 }
 
-// sendAckTo() method removed - alert system not compatible with sleeping nodes
-
 void SensorMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data, size_t len) {
   int i = matching_peer_indexes[sender_idx];
   if (i < 0 || i >= acl.getNumClients()) {
@@ -788,8 +736,6 @@ void SensorMesh::begin(FILESYSTEM* fs) {
   radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_set_tx_power(_prefs.tx_power_dbm);
 
-  // updateAdvertTimer() and updateFloodAdvertTimer() removed - time-based ads removed
-
 #if ENV_INCLUDE_GPS == 1
   applyGpsPrefs();
 #endif
@@ -916,8 +862,6 @@ void SensorMesh::broadcastTelemetry() {
   }
 }
 
-// updateAdvertTimer() and updateFloodAdvertTimer() removed - time-based ads removed for sleeping nodes
-
 void SensorMesh::setTxPower(uint8_t power_dbm) {
   radio_set_tx_power(power_dbm);
 }
@@ -968,18 +912,6 @@ bool  SensorMesh::getGPS(uint8_t channel, float& lat, float& lon, float& alt) {
 
 void SensorMesh::loop() {
   mesh::Mesh::loop();
-
-  // Time-based advertisement removed - sleeping nodes use wakeup counter in main.cpp
-
-  // Temporary radio params timer handling removed - not compatible with sleeping nodes
-
-  // Sensor reading removed from loop() - main.cpp handles sampling via state machine for sleeping nodes
-
-  // Alert system removed for low-power sleeping nodes
-  // Sleeping nodes are primarily telemetry broadcasters, not interactive
-  // If alerts/notifications are needed, implement at application level with persistence
-
-  // Lazy write timer removed - ACL changes are now saved immediately (sleeping nodes can't rely on timers)
 }
 
 /* ==================== Zone Management for Transport Codes ====================

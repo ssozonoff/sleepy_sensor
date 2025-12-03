@@ -53,11 +53,6 @@ protected:
     // All sensor reading happens in broadcastApplicationTelemetry()
   }
 
-  int querySeriesData(uint32_t start_secs_ago, uint32_t end_secs_ago,
-                     MinMaxAvg dest[], int max_num) override {
-    return 0; // Not storing series data in low-power mode
-  }
-
   bool handleCustomCommand(uint32_t sender_timestamp, char* command, char* reply) override {
     if (sender_timestamp == 0 && strcmp(command, "exit") == 0) {
       if (current_state_ptr && *current_state_ptr == INTERACTIVE_MODE) {

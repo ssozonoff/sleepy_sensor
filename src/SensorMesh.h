@@ -3,8 +3,6 @@
 #include <Arduino.h>   // needed for PlatformIO
 #include <Mesh.h>
 
-#include "TimeSeriesData.h"
-
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
 #include <InternalFileSystem.h>
 #elif defined(RP2040_PLATFORM)
@@ -122,7 +120,6 @@ protected:
   // If alerts/notifications are needed, implement at application level with persistence
 
   virtual void onSensorDataRead() = 0;   // for app to implement
-  virtual int querySeriesData(uint32_t start_secs_ago, uint32_t end_secs_ago, MinMaxAvg dest[], int max_num) = 0;  // for app to implement
   virtual bool handleCustomCommand(uint32_t sender_timestamp, char* command, char* reply) { return false; }
 
   // Mesh overrides
