@@ -1,5 +1,31 @@
 #include "SensorMesh.h"
 
+// ============================================================
+// CHANNEL DEFINITIONS
+// ============================================================
+
+// Standard Telemetry Channels (1-9) - Reserved for system/framework
+#define TELEM_CHANNEL_BATTERY       1   // Battery voltage
+
+// Application Telemetry Channels (10+) - CUSTOMIZE THIS SECTION
+// Define your sensor channels here
+// Example:
+// #define APP_CHANNEL_TEMPERATURE     10
+// #define APP_CHANNEL_HUMIDITY        11
+// #define APP_CHANNEL_PRESSURE        12
+// Add your sensors here...
+
+// ============================================================
+// APPLICATION SENSOR OBJECTS
+// Declare your sensor objects here
+// ============================================================
+// Example:
+// #include <Adafruit_BME280.h>
+// Adafruit_BME280 bme;
+// bool bme_initialized = false;
+
+// ============================================================
+
 // State machine
 enum SensorNodeState {
   SAMPLING,
@@ -23,10 +49,8 @@ public:
 
 protected:
   void onSensorDataRead() override {
-    float batt_voltage = getVoltage(TELEM_CHANNEL_SELF);
-    MESH_DEBUG_PRINTLN("Battery: %.2fV", batt_voltage);
-
-    // Add your sensor logic here
+    // Not used in low-power mode - device sleeps between wake cycles
+    // All sensor reading happens in broadcastApplicationTelemetry()
   }
 
   int querySeriesData(uint32_t start_secs_ago, uint32_t end_secs_ago,
@@ -60,6 +84,107 @@ static const size_t MAX_SERIAL_WAIT_MS = 5000;
 LowPowerSensorMesh the_mesh(board, radio_driver, *new ArduinoMillis(),
                             fast_rng, rtc_clock, tables);
 
+// ============================================================
+// APPLICATION TELEMETRY BROADCAST FUNCTION
+// CUSTOMIZE THIS SECTION TO ADD YOUR SENSOR DATA
+// ============================================================
+
+void broadcastApplicationTelemetry() {
+  // Create telemetry buffer
+  CayenneLPP telemetry(MAX_PACKET_PAYLOAD - 5);
+  telemetry.reset();
+
+  // === STANDARD TELEMETRY (Always included) ===
+  telemetry.addVoltage(TELEM_CHANNEL_BATTERY,
+                      board.getBattMilliVolts() / 1000.0f);
+
+  // === APPLICATION TELEMETRY ===
+  // CUSTOMIZE THIS SECTION - Add your sensor readings here
+
+  // Example 1: I2C Temperature/Humidity Sensor (BME280, SHT31, etc.)
+  // if (bme_initialized) {
+  //   float temp = bme.readTemperature();
+  //   float humidity = bme.readHumidity();
+  //   telemetry.addTemperature(APP_CHANNEL_TEMPERATURE, temp);
+  //   telemetry.addRelativeHumidity(APP_CHANNEL_HUMIDITY, humidity);
+  //   MESH_DEBUG_PRINTLN("BME280: %.2fC, %.1f%%", temp, humidity);
+  // }
+
+  // Example 2: Analog Sensor (soil moisture, light sensor, etc.)
+  // int raw_value = analogRead(A0);
+  // float analog_value = raw_value * (3.3 / 4095.0);  // For 12-bit ADC
+  // telemetry.addAnalogInput(APP_CHANNEL_SENSOR_1, analog_value);
+  // MESH_DEBUG_PRINTLN("Analog: %.3fV", analog_value);
+
+  // Example 3: Digital Sensor (door switch, motion detector, etc.)
+  // bool digital_state = digitalRead(SENSOR_PIN);
+  // telemetry.addDigitalInput(APP_CHANNEL_SENSOR_2, digital_state ? 1 : 0);
+  // MESH_DEBUG_PRINTLN("Digital: %s", digital_state ? "HIGH" : "LOW");
+
+  // Example 4: Averaged sensor values from SAMPLING state
+  // float avg_sensor = 0;
+  // for (int i = 0; i < sample_count; i++) {
+  //   avg_sensor += app_sensor_samples[i];
+  // }
+  // avg_sensor /= sample_count;
+  // telemetry.addTemperature(APP_CHANNEL_TEMPERATURE, avg_sensor);
+  // MESH_DEBUG_PRINTLN("Avg sensor: %.2f", avg_sensor);
+
+  // === BROADCAST THE TELEMETRY ===
+  uint8_t telem_len = telemetry.getSize();
+  if (telem_len == 0) {
+    MESH_DEBUG_PRINTLN("No telemetry data to broadcast");
+    return;
+  }
+
+  int offset = 0;
+
+  // Create packet with timestamp + telemetry
+  uint8_t temp[5 + MAX_PACKET_PAYLOAD];
+  uint32_t timestamp = the_mesh.getRTCClock()->getCurrentTime();
+  memcpy(temp, &timestamp, 4);
+  offset += 4;
+
+  // Calculate padding length BEFORE setting flags
+  uint8_t total_len = offset + 1 + telemetry.getSize();  
+  uint8_t padding_len = (16 - (total_len % 16)) % 16;  
+  
+  uint8_t flags = 0x00;  // Upper 4 bits reserved for future use
+  flags |= (padding_len & 0x0F);  // Store padding in lower 4 bits
+  temp[offset++] = flags;
+
+  // add CayenneLPP data
+  memcpy(&temp[offset], telemetry.getBuffer(), telem_len);
+  offset += telemetry.getSize();
+
+  // Create public group datagram
+  mesh::GroupChannel public_channel;
+  memset(public_channel.hash, 0, sizeof(public_channel.hash));
+  memset(public_channel.secret, 0, sizeof(public_channel.secret));
+
+  auto pkt = the_mesh.createGroupDatagram(PAYLOAD_TYPE_GRP_DATA,
+                                          public_channel, temp, offset);
+
+  if (pkt) {
+    // Use broadcast zone if configured, otherwise standard flood
+    const char* zone = the_mesh.getBroadcastZoneName();
+    if (zone == NULL) {
+      the_mesh.sendFlood(pkt);
+      MESH_DEBUG_PRINTLN("Telemetry broadcast (%d bytes) - standard flood", telem_len);
+    } else {
+      uint16_t codes[2];
+      codes[0] = the_mesh.getBroadcastZone().calcTransportCode(pkt);
+      codes[1] = 0;
+      the_mesh.sendFlood(pkt, codes);
+      MESH_DEBUG_PRINTLN("Telemetry broadcast (%d bytes) - zone: %s", telem_len, zone);
+    }
+  } else {
+    MESH_DEBUG_PRINTLN("ERROR: unable to create telemetry packet!");
+  }
+}
+
+// ============================================================
+
 // Configuration constants (can be moved to preferences later)
 static const uint32_t SAMPLE_INTERVAL_MS = 1000;           // 1 second between samples
 static const uint8_t NUM_SAMPLES = 10;                      // Number of samples to collect
@@ -77,6 +202,14 @@ static float sensor_samples[NUM_SAMPLES];
 static int sample_count = 0;
 static uint32_t last_sample_time = 0;
 
+// ============================================================
+// APPLICATION SENSOR SAMPLING STORAGE (Optional)
+// If you want to average multiple samples, declare storage here
+// ============================================================
+// Example:
+// static float app_sensor_samples[NUM_SAMPLES];
+// ============================================================
+
 void setup() {
   // Basic initialization
   pinMode(LED_BUILTIN, OUTPUT);
@@ -89,17 +222,22 @@ void setup() {
   }
   Serial.begin(115200);
   delay(1000);
+  MESH_DEBUG_PRINTLN("Setup");
 
   // Board init
+  MESH_DEBUG_PRINTLN("Calling board.begin()...");
   board.begin();
+  MESH_DEBUG_PRINTLN("board.begin() completed");
 
   //TODO: This is too specific to the DS3231, this should refactored to an interface
   // Load wakeup counter from GPREGRET2 (persists across sleep, resets on power cycle)
+  MESH_DEBUG_PRINTLN("Loading wakeup counter...");
   wakeup_count = NRF_POWER->GPREGRET2;
   MESH_DEBUG_PRINTLN("=== WAKEUP #%d at %lu ms ===", wakeup_count, millis());
   wakeup_count++;
 
   // Initialize radio and mesh
+  MESH_DEBUG_PRINTLN("Initializing radio...");
   if (!radio_init()) {
     while(1) {
       digitalWrite(LED_BUILTIN, HIGH);
@@ -109,8 +247,10 @@ void setup() {
     }
   }
 
+  MESH_DEBUG_PRINTLN("Radio initialized successfully");
   fast_rng.begin(radio_get_rng_seed());
 
+  MESH_DEBUG_PRINTLN("Initializing filesystem...");
   FILESYSTEM* fs;
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   InternalFS.begin();
@@ -128,6 +268,7 @@ void setup() {
 #else
   #error "need to define filesystem"
 #endif
+  MESH_DEBUG_PRINTLN("Loading identity...");
   if (!store.load("_main", the_mesh.self_id)) {
     MESH_DEBUG_PRINTLN("Generating new keypair");
     the_mesh.self_id = radio_new_identity();   // create new random identity
@@ -137,8 +278,10 @@ void setup() {
     }
     store.save("_main", the_mesh.self_id);
   }
+  MESH_DEBUG_PRINTLN("Identity loaded");
 
   // Initialize state machine
+  MESH_DEBUG_PRINTLN("Initializing state machine...");
   current_state = SAMPLING;
   awake_start_time = millis();
   state_start_time = awake_start_time;
@@ -147,12 +290,44 @@ void setup() {
 
   MESH_DEBUG_PRINTLN("Setup complete, entering main loop");
 
+  MESH_DEBUG_PRINTLN("Calling sensors.begin()...");
   sensors.begin();
+  MESH_DEBUG_PRINTLN("sensors.begin() completed");
+
+  MESH_DEBUG_PRINTLN("Calling the_mesh.begin()...");
   the_mesh.begin(fs);
+  MESH_DEBUG_PRINTLN("the_mesh.begin() completed");
+
+  // ============================================================
+  // APPLICATION SENSOR INITIALIZATION
+  // CUSTOMIZE THIS SECTION - Initialize your sensors here
+  // ============================================================
+
+  // Example 1: I2C Sensor (BME280, SHT31, etc.)
+  // Wire.begin();
+  // if (bme.begin(0x76)) {
+  //   bme_initialized = true;
+  //   MESH_DEBUG_PRINTLN("BME280 initialized");
+  // } else {
+  //   MESH_DEBUG_PRINTLN("BME280 initialization failed!");
+  // }
+
+  // Example 2: Analog Sensor
+  // pinMode(A0, INPUT);
+  // analogReadResolution(12);  // 12-bit ADC on nRF52
+
+  // Example 3: Digital Sensor
+  // pinMode(SENSOR_PIN, INPUT_PULLUP);
+
+  // Example 4: UART Sensor
+  // Serial1.begin(9600);
+
+  // ============================================================
 
   // Set state pointer for exit command
   the_mesh.setStatePointer(&current_state);
 
+  MESH_DEBUG_PRINTLN("===== SETUP COMPLETE - ENTERING LOOP() =====");
   // Fall through to loop()
 }
 
@@ -170,6 +345,12 @@ void loop() {
       // Take samples at configured intervals
       if (now - last_sample_time >= SAMPLE_INTERVAL_MS) {
         sensor_samples[sample_count] = board.getBattMilliVolts() / 1000.0f;
+
+        // === APPLICATION SENSOR SAMPLING (Optional) ===
+        // If you want to average multiple sensor readings, sample them here
+        // Example:
+        // app_sensor_samples[sample_count] = analogRead(A0) * (3.3 / 4095.0);
+
         MESH_DEBUG_PRINTLN("Sample %d/%d: %.2fV", sample_count + 1, NUM_SAMPLES, sensor_samples[sample_count]);
         sample_count++;
         last_sample_time = now;
@@ -193,8 +374,8 @@ void loop() {
 
       MESH_DEBUG_PRINTLN("Average battery: %.2fV", avg);
 
-      // Always send telemetry data
-      the_mesh.broadcastTelemetry();
+      // Broadcast application telemetry (includes battery + custom sensors)
+      broadcastApplicationTelemetry();
       MESH_DEBUG_PRINTLN("Telemetry broadcast sent");
 
       // Decide if we should also advertise (periodic, based on wakeup counter)

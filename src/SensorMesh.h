@@ -98,6 +98,7 @@ public:
   void setBroadcastZone(const char* zone_name);    // Set zone for transport codes (e.g., "building-a")
   void clearBroadcastZone();                        // Disable zones, use standard flooding
   const char* getBroadcastZoneName() const;         // Get current zone name (NULL if disabled)
+  const TransportKey& getBroadcastZone() const { return broadcast_zone; }  // Get broadcast zone for transport codes
 
 protected:
   // current telemetry data queries

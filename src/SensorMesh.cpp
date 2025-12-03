@@ -1025,6 +1025,7 @@ void SensorMesh::loop() {
     MESH_DEBUG_PRINTLN("Radio params restored");
   }
 
+  //TODO: Do we still need this, does it make sense?
   uint32_t curr = getRTCClock()->getCurrentTime();
   if (curr >= last_read_time + SENSOR_READ_INTERVAL_SECS) {
     telemetry.reset();
