@@ -369,18 +369,7 @@ enum SensorNodeState {
 
 ### Add Custom Sensors
 
-Override `onSensorDataRead()` in the `LowPowerSensorMesh` class:
-
-```cpp
-void onSensorDataRead() override {
-  float batt_voltage = getVoltage(TELEM_CHANNEL_SELF);
-  float temperature = getTemperature(TELEM_CHANNEL_SELF);
-  float humidity = getRelativeHumidity(TELEM_CHANNEL_SELF);
-
-  MESH_DEBUG_PRINTLN("Batt: %.2fV, Temp: %.1f°C, RH: %.0f%%",
-                     batt_voltage, temperature, humidity);
-}
-```
+-- todo
 
 ### Modify Sampling Behavior
 
