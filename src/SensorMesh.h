@@ -147,11 +147,7 @@ private:
   uint32_t last_read_time;
   int matching_peer_indexes[MAX_SEARCH_RESULTS];
   // num_alert_tasks and alert_tasks removed - alert system not compatible with sleeping nodes
-  unsigned long set_radio_at, revert_radio_at;
-  float pending_freq;
-  float pending_bw;
-  uint8_t pending_sf;
-  uint8_t pending_cr;
+  // set_radio_at, revert_radio_at, pending_* removed - temp radio params not compatible with sleeping nodes
 
   // Transport code support for zone-based broadcasting
   TransportKey broadcast_zone;

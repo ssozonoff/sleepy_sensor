@@ -708,7 +708,7 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
   // dirty_contacts_expiry = 0;  // Lazy write timer removed for sleeping nodes
   last_read_time = 0;
   // num_alert_tasks = 0;  // Alert system removed for sleeping nodes
-  set_radio_at = revert_radio_at = 0;
+  // set_radio_at = revert_radio_at = 0;  // Temp radio params removed for sleeping nodes
   zone_name[0] = 0;  // Initialize zone name as empty
 
   // defaults
@@ -802,13 +802,9 @@ void SensorMesh::saveIdentity(const mesh::LocalIdentity& new_id) {
 }
 
 void SensorMesh::applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) {
-  set_radio_at = futureMillis(2000);   // give CLI reply some time to be sent back, before applying temp radio params
-  pending_freq = freq;
-  pending_bw = bw;
-  pending_sf = sf;
-  pending_cr = cr;
-
-  revert_radio_at = futureMillis(2000 + timeout_mins*60*1000);   // schedule when to revert radio params
+  // Temporary radio parameters removed - not compatible with sleeping nodes
+  // Timers don't survive sleep cycles, making this feature unreliable
+  MESH_DEBUG_PRINTLN("Temp radio params not supported on sleeping nodes");
 }
 
 void SensorMesh::sendSelfAdvertisement(int delay_millis) {
@@ -949,17 +945,7 @@ void SensorMesh::loop() {
     updateAdvertTimer();   // schedule next local advert
   }
 
-  if (set_radio_at && millisHasNowPassed(set_radio_at)) {   // apply pending (temporary) radio params
-    set_radio_at = 0;  // clear timer
-    radio_set_params(pending_freq, pending_bw, pending_sf, pending_cr);
-    MESH_DEBUG_PRINTLN("Temp radio params");
-  }
-
-  if (revert_radio_at && millisHasNowPassed(revert_radio_at)) {   // revert radio params to orig
-    revert_radio_at = 0;  // clear timer
-    radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
-    MESH_DEBUG_PRINTLN("Radio params restored");
-  }
+  // Temporary radio params timer handling removed - not compatible with sleeping nodes
 
   //TODO: Do we still need this, does it make sense?
   uint32_t curr = getRTCClock()->getCurrentTime();
