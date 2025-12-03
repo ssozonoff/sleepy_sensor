@@ -60,8 +60,7 @@
 
 #define CLI_REPLY_DELAY_MILLIS  1000
 
-#define LAZY_CONTACTS_WRITE_DELAY       5000
-
+// LAZY_CONTACTS_WRITE_DELAY removed - ACL changes saved immediately for sleeping nodes
 // ALERT_ACK_EXPIRY_MILLIS removed - alert system not compatible with sleeping nodes
 
 static File openAppend(FILESYSTEM* _fs, const char* fname) {
@@ -315,7 +314,8 @@ uint8_t SensorMesh::handleLoginReq(const mesh::Identity& sender, const uint8_t* 
     client->permissions |= PERM_ACL_ADMIN;
     memcpy(client->shared_secret, secret, PUB_KEY_SIZE);
 
-    dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+    // Immediately save ACL changes (sleeping nodes can't rely on lazy write timers)
+    acl.save(_fs);
   }
 
   uint32_t now = getRTCClock()->getCurrentTimeUnique();
@@ -358,7 +358,8 @@ void SensorMesh::handleCommand(uint32_t sender_timestamp, char* command, char* r
       if (mesh::Utils::fromHex(pubkey, hex_len / 2, hex)) {
         uint8_t perms = atoi(sp);
         if (acl.applyPermissions(self_id, pubkey, hex_len / 2, perms)) {
-          dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);   // trigger acl.save()
+          // Immediately save ACL changes (sleeping nodes can't rely on lazy write timers)
+          acl.save(_fs);
           strcpy(reply, "OK");
         } else {
           strcpy(reply, "Err - invalid params");
@@ -685,10 +686,10 @@ bool SensorMesh::onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint
   memcpy(from->out_path, path, from->out_path_len = path_len);  // store a copy of path, for sendDirect()
   from->last_activity = getRTCClock()->getCurrentTime();
 
-  // REVISIT: maybe make ALL out_paths non-persisted to minimise flash writes??
+  // REVISIT: Paths are invalidated on wake for sleeping nodes (see Fix 2)
+  // For now, immediately save admin paths (sleeping nodes can't rely on lazy write timers)
   if (from->isAdmin()) {
-    // only do saveContacts() (of this out_path change) if this is an admin
-    dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+    acl.save(_fs);
   }
 
   // NOTE: no reciprocal path send!!
@@ -704,7 +705,7 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
       _cli(board, rtc, sensors, &_prefs, this), telemetry(MAX_PACKET_PAYLOAD - 4)
 {
   next_local_advert = next_flood_advert = 0;
-  dirty_contacts_expiry = 0;
+  // dirty_contacts_expiry = 0;  // Lazy write timer removed for sleeping nodes
   last_read_time = 0;
   // num_alert_tasks = 0;  // Alert system removed for sleeping nodes
   set_radio_at = revert_radio_at = 0;
@@ -977,11 +978,7 @@ void SensorMesh::loop() {
   // Sleeping nodes are primarily telemetry broadcasters, not interactive
   // If alerts/notifications are needed, implement at application level with persistence
 
-  // is there are pending dirty contacts write needed?
-  if (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry)) {
-    acl.save(_fs);
-    dirty_contacts_expiry = 0;
-  }
+  // Lazy write timer removed - ACL changes are now saved immediately (sleeping nodes can't rely on timers)
 }
 
 /* ==================== Zone Management for Transport Codes ====================

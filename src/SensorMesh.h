@@ -142,7 +142,7 @@ private:
   CommonCLI _cli;
   uint8_t reply_data[MAX_PACKET_PAYLOAD];
   ClientACL  acl;
-  unsigned long dirty_contacts_expiry;
+  // dirty_contacts_expiry removed - ACL changes saved immediately for sleeping nodes
   CayenneLPP telemetry;
   uint32_t last_read_time;
   int matching_peer_indexes[MAX_SEARCH_RESULTS];
