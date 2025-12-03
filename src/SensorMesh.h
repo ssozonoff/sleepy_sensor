@@ -44,7 +44,7 @@
 #define FIRMWARE_ROLE "sensor"
 
 #define MAX_SEARCH_RESULTS      8
-#define MAX_CONCURRENT_ALERTS   4
+// MAX_CONCURRENT_ALERTS removed - alert system not compatible with sleeping nodes
 
 // Transport Code Configuration
 // Zones enable selective packet forwarding by repeaters to reduce network congestion.
@@ -111,22 +111,8 @@ protected:
   float getAltitude(uint8_t channel) { return getTelemValue(channel, LPP_ALTITUDE); }
   bool  getGPS(uint8_t channel, float& lat, float& lon, float& alt);
 
-  // alerts
-  enum AlertPriority { LOW_PRI_ALERT, HIGH_PRI_ALERT };
-
-  struct Trigger {
-    uint32_t timestamp;
-    AlertPriority pri;
-    uint32_t expected_acks[4];
-    int8_t   curr_contact_idx;
-    uint8_t  attempt;
-    unsigned long send_expiry;
-    char text[MAX_PACKET_PAYLOAD];
-
-    Trigger() { text[0] = 0; }
-    bool isTriggered() const { return text[0] != 0; }
-  };
-  void alertIf(bool condition, Trigger& t, AlertPriority pri, const char* text);
+  // Alert system removed for sleeping nodes - not compatible with sleep/wake cycles
+  // If alerts/notifications are needed, implement at application level with persistence
 
   virtual void onSensorDataRead() = 0;   // for app to implement
   virtual int querySeriesData(uint32_t start_secs_ago, uint32_t end_secs_ago, MinMaxAvg dest[], int max_num) = 0;  // for app to implement
@@ -148,7 +134,7 @@ protected:
   void onControlDataRecv(mesh::Packet* packet) override;
   void onAckRecv(mesh::Packet* packet, uint32_t ack_crc) override;
   virtual bool handleIncomingMsg(ClientInfo& from, uint32_t timestamp, uint8_t* data, uint flags, size_t len);
-  void sendAckTo(const ClientInfo& dest, uint32_t ack_hash);
+  // sendAckTo() removed - alert system not compatible with sleeping nodes
 private:
   FILESYSTEM* _fs;
   unsigned long next_local_advert, next_flood_advert;
@@ -160,8 +146,7 @@ private:
   CayenneLPP telemetry;
   uint32_t last_read_time;
   int matching_peer_indexes[MAX_SEARCH_RESULTS];
-  int num_alert_tasks;
-  Trigger* alert_tasks[MAX_CONCURRENT_ALERTS];
+  // num_alert_tasks and alert_tasks removed - alert system not compatible with sleeping nodes
   unsigned long set_radio_at, revert_radio_at;
   float pending_freq;
   float pending_bw;
@@ -175,8 +160,7 @@ private:
   uint8_t handleLoginReq(const mesh::Identity& sender, const uint8_t* secret, uint32_t sender_timestamp, const uint8_t* data);
   uint8_t handleRequest(uint8_t perms, uint32_t sender_timestamp, uint8_t req_type, uint8_t* payload, size_t payload_len);
   mesh::Packet* createSelfAdvert();
-
-  void sendAlert(const ClientInfo* c, Trigger* t);
+  // sendAlert() removed - alert system not compatible with sleeping nodes
 
   #if ENV_INCLUDE_GPS == 1
   void applyGpsPrefs() {

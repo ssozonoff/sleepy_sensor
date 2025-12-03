@@ -62,7 +62,7 @@
 
 #define LAZY_CONTACTS_WRITE_DELAY       5000
 
-#define ALERT_ACK_EXPIRY_MILLIS         8000   // wait 8 secs for ACKs to alert messages
+// ALERT_ACK_EXPIRY_MILLIS removed - alert system not compatible with sleeping nodes
 
 static File openAppend(FILESYSTEM* _fs, const char* fname) {
   #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -245,57 +245,9 @@ mesh::Packet* SensorMesh::createSelfAdvert() {
   return createAdvert(self_id, app_data, app_data_len);
 }
 
-void SensorMesh::sendAlert(const ClientInfo* c, Trigger* t) {
-  int text_len = strlen(t->text);
+// sendAlert() method removed - alert system not compatible with sleeping nodes
 
-  uint8_t data[MAX_PACKET_PAYLOAD];
-  memcpy(data, &t->timestamp, 4);
-  data[4] = (TXT_TYPE_PLAIN << 2) | t->attempt;  // attempt and flags
-  memcpy(&data[5], t->text, text_len);
-
-  // calc expected ACK reply
-  mesh::Utils::sha256((uint8_t *)&t->expected_acks[t->attempt], 4, data, 5 + text_len, self_id.pub_key, PUB_KEY_SIZE);
-  t->attempt++;
-
-  auto pkt = createDatagram(PAYLOAD_TYPE_TXT_MSG, c->id, c->shared_secret, data, 5 + text_len);
-  if (pkt) {
-    if (c->out_path_len >= 0) {  // we have an out_path, so send DIRECT
-      sendDirect(pkt, c->out_path, c->out_path_len);
-    } else {
-      sendFlood(pkt);
-    }
-  }
-  t->send_expiry = futureMillis(ALERT_ACK_EXPIRY_MILLIS);
-}
-
-void SensorMesh::alertIf(bool condition, Trigger& t, AlertPriority pri, const char* text) {
-  if (condition) {
-    if (!t.isTriggered() && num_alert_tasks < MAX_CONCURRENT_ALERTS) {
-      StrHelper::strncpy(t.text, text, sizeof(t.text));
-      t.pri = pri;
-      t.send_expiry = 0;  // signal that initial send is needed
-      t.attempt = 4;
-      t.curr_contact_idx = -1;  // start iterating thru contacts[]
-
-      alert_tasks[num_alert_tasks++] = &t;  // add to queue
-    }
-  } else {
-    if (t.isTriggered()) {
-      t.text[0] = 0;
-      // remove 't' from alert queue
-      int i = 0;
-      while (i < num_alert_tasks && alert_tasks[i] != &t) i++;
-
-      if (i < num_alert_tasks) {  // found,  now delete from array
-        num_alert_tasks--;
-        while (i < num_alert_tasks) {
-          alert_tasks[i] = alert_tasks[i + 1];
-          i++;
-        }
-      }
-    }
-  }
-}
+// alertIf() method removed - alert system not compatible with sleeping nodes
 
 float SensorMesh::getAirtimeBudgetFactor() const {
   return _prefs.airtime_factor;
@@ -567,22 +519,7 @@ void SensorMesh::getPeerSharedSecret(uint8_t* dest_secret, int peer_idx) {
   }
 }
 
-void SensorMesh::sendAckTo(const ClientInfo& dest, uint32_t ack_hash) {
-  if (dest.out_path_len < 0) {
-    mesh::Packet* ack = createAck(ack_hash);
-    if (ack) sendFlood(ack, TXT_ACK_DELAY);
-  } else {
-    uint32_t d = TXT_ACK_DELAY;
-    if (getExtraAckTransmitCount() > 0) {
-      mesh::Packet* a1 = createMultiAck(ack_hash, 1);
-      if (a1) sendDirect(a1, dest.out_path, dest.out_path_len, d);
-      d += 300;
-    }
-
-    mesh::Packet* a2 = createAck(ack_hash);
-    if (a2) sendDirect(a2, dest.out_path, dest.out_path_len, d);
-  }
-}
+// sendAckTo() method removed - alert system not compatible with sleeping nodes
 
 void SensorMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data, size_t len) {
   int i = matching_peer_indexes[sender_idx];
@@ -640,7 +577,15 @@ void SensorMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_i
                                                   PAYLOAD_TYPE_ACK, (uint8_t *) &ack_hash, 4);
             if (path) sendFlood(path, TXT_ACK_DELAY);
           } else {
-            sendAckTo(*from, ack_hash);
+            // Send simple ACK (alert system removed, so simplified ACK handling)
+            mesh::Packet* ack = createAck(ack_hash);
+            if (ack) {
+              if (from->out_path_len < 0) {
+                sendFlood(ack, TXT_ACK_DELAY);
+              } else {
+                sendDirect(ack, from->out_path, from->out_path_len, TXT_ACK_DELAY);
+              }
+            }
           }
         }
       } else if (flags == TXT_TYPE_CLI_DATA) {  
@@ -751,17 +696,7 @@ bool SensorMesh::onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint
 }
 
 void SensorMesh::onAckRecv(mesh::Packet* packet, uint32_t ack_crc) {
-  if (num_alert_tasks > 0) {
-    auto t = alert_tasks[0];   // check current alert task
-    for (int i = 0; i < t->attempt; i++) {
-      if (ack_crc == t->expected_acks[i]) {   // matching ACK!
-        t->attempt = 4;  // signal to move to next contact
-        t->send_expiry = 0;
-        packet->markDoNotRetransmit();   // ACK was for this node, so don't retransmit
-        return;
-      }
-    }
-  }
+  // Alert ACK handling removed - alert system not compatible with sleeping nodes
 }
 
 SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables)
@@ -771,7 +706,7 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
   next_local_advert = next_flood_advert = 0;
   dirty_contacts_expiry = 0;
   last_read_time = 0;
-  num_alert_tasks = 0;
+  // num_alert_tasks = 0;  // Alert system removed for sleeping nodes
   set_radio_at = revert_radio_at = 0;
   zone_name[0] = 0;  // Initialize zone name as empty
 
@@ -1038,41 +973,9 @@ void SensorMesh::loop() {
     last_read_time = curr;
   }
 
-  // check the alert send queue
-  if (num_alert_tasks > 0) {
-    auto t = alert_tasks[0];   // process head of queue
-
-    if (millisHasNowPassed(t->send_expiry)) {  // next send needed?
-      if (t->attempt >= 4) {  // max attempts reached, try next contact
-        t->curr_contact_idx++;
-        if (t->curr_contact_idx >= acl.getNumClients()) {  // no more contacts to try?
-          num_alert_tasks--;   // remove t from queue
-          for (int i = 0; i < num_alert_tasks; i++) {
-            alert_tasks[i] = alert_tasks[i + 1];
-          }
-        } else {
-          auto c = acl.getClientByIdx(t->curr_contact_idx);
-          uint16_t pri_mask = (t->pri == HIGH_PRI_ALERT) ? PERM_RECV_ALERTS_HI : PERM_RECV_ALERTS_LO;
-
-          if (c->permissions & pri_mask) {   // contact wants alert
-            // reset attempts
-            t->attempt = (t->pri == LOW_PRI_ALERT) ? 3 : 0;   // Low pri alerts, start at attempt #3 (ie. only make ONE attempt)
-            t->timestamp = getRTCClock()->getCurrentTimeUnique();   // need unique timestamp per contact
-
-            sendAlert(c, t);  // NOTE: modifies attempt, expected_acks[] and send_expiry
-          } else {
-            // next contact tested in next ::loop()
-          }
-        }
-      } else if (t->curr_contact_idx < acl.getNumClients()) {
-        auto c = acl.getClientByIdx(t->curr_contact_idx);   // send next attempt
-        sendAlert(c, t);  // NOTE: modifies attempt, expected_acks[] and send_expiry
-      } else {
-        // contact list has likely been modified while waiting for alert ACK, cancel this task
-        t->attempt = 4;   // next ::loop() will remove t from queue
-      }
-    }
-  }
+  // Alert system removed for low-power sleeping nodes
+  // Sleeping nodes are primarily telemetry broadcasters, not interactive
+  // If alerts/notifications are needed, implement at application level with persistence
 
   // is there are pending dirty contacts write needed?
   if (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry)) {

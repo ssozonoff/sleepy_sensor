@@ -331,6 +331,49 @@ void setup() {
   // Fall through to loop()
 }
 
+// ============================================================
+// SERIAL COMMAND HANDLER
+// ============================================================
+void handleSerialCommands(uint32_t now) {
+  int len = strlen(command);
+  while (Serial.available() && len < sizeof(command)-1) {
+    char c = Serial.read();
+    if (c != '\n') {
+      command[len++] = c;
+      command[len] = 0;
+    }
+    Serial.print(c);
+  }
+  if (len == sizeof(command)-1) {
+    command[sizeof(command)-1] = '\r';
+  }
+
+  if (len > 0 && command[len - 1] == '\r') {
+    command[len - 1] = 0;
+
+    char reply[160];
+    the_mesh.handleCommand(0, command, reply);
+    if (reply[0]) {
+      Serial.print("  -> "); Serial.println(reply);
+    }
+    command[0] = 0;
+
+    // Enter interactive mode when a command is received (unless explicitly exiting)
+    if (current_state != INTERACTIVE_MODE && current_state != READY_TO_SLEEP) {
+      MESH_DEBUG_PRINTLN("Command received, entering interactive mode, the sleep mode will resume after 60s of inactivity");
+      current_state = INTERACTIVE_MODE;
+      state_start_time = now;
+    }
+    // Update last activity time (only if not exiting)
+    if (current_state == INTERACTIVE_MODE) {
+      last_interactive_activity = now;
+    }
+  }
+}
+
+// ============================================================
+// MAIN LOOP - LOW POWER STATE MACHINE
+// ============================================================
 void loop() {
   uint32_t now = millis();
 
@@ -442,39 +485,6 @@ void loop() {
 #endif
   rtc_clock.tick();
 
-  // Handle serial commands
-  int len = strlen(command);
-  while (Serial.available() && len < sizeof(command)-1) {
-    char c = Serial.read();
-    if (c != '\n') {
-      command[len++] = c;
-      command[len] = 0;
-    }
-    Serial.print(c);
-  }
-  if (len == sizeof(command)-1) {
-    command[sizeof(command)-1] = '\r';
-  }
-
-  if (len > 0 && command[len - 1] == '\r') {
-    command[len - 1] = 0;
-    
-    char reply[160];
-    the_mesh.handleCommand(0, command, reply);
-    if (reply[0]) {
-      Serial.print("  -> "); Serial.println(reply);
-    }
-    command[0] = 0;
-
-    // Enter interactive mode when a command is received (unless explicitly exiting)
-    if (current_state != INTERACTIVE_MODE && current_state != READY_TO_SLEEP) {
-      MESH_DEBUG_PRINTLN("Command received, entering interactive mode, the sleep mode will resume after 60s of inactivity");
-      current_state = INTERACTIVE_MODE;
-      state_start_time = now;
-    }
-    // Update last activity time (only if not exiting)
-    if (current_state == INTERACTIVE_MODE) {
-      last_interactive_activity = now;
-    }
-  }
+  // Handle serial commands (supports interactive mode)
+  handleSerialCommands(now);
 }
