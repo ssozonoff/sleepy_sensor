@@ -145,12 +145,9 @@ void broadcastApplicationTelemetry() {
   memcpy(temp, &timestamp, 4);
   offset += 4;
 
-  // Calculate padding length BEFORE setting flags
-  uint8_t total_len = offset + 1 + telemetry.getSize();  
-  uint8_t padding_len = (16 - (total_len % 16)) % 16;  
-  
-  uint8_t flags = 0x00;  // Upper 4 bits reserved for future use
-  flags |= (padding_len & 0x0F);  // Store padding in lower 4 bits
+  // Flags byte (reserved for future use)
+  // Note: Padding is handled by encryption layer. CayenneLPP channel 0 marks end of data.
+  uint8_t flags = 0x00;
   temp[offset++] = flags;
 
   // add CayenneLPP data
