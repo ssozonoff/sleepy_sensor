@@ -429,7 +429,7 @@ void loop() {
       MESH_DEBUG_PRINTLN("Telemetry broadcast sent");
 
       // Decide if we should also advertise (periodic, based on wakeup counter)
-      uint8_t wakeups_per_advert = the_mesh.getNodePrefs()->wakeups_per_advert;
+      uint8_t wakeups_per_advert = the_mesh.getExtendedPrefs()->wakeups_per_advert;
 
       if (wakeup_count >= wakeups_per_advert) {
         MESH_DEBUG_PRINTLN("Wakeup #%d - Time for advertisement!", wakeup_count);

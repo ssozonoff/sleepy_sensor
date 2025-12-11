@@ -23,7 +23,7 @@ for item in menv.get("BUILD_FLAGS", []):
         menv.Append(BUILD_FLAGS=[f"-I {variant_dir}"])
 
     elif "ADD_BUILD_FLAGS" in item :
-        build_flags_file = f"build_flags/{item.split("=",1)[1]}"
+        build_flags_file = f"build_flags/{item.split('=',1)[1]}"
         with open(build_flags_file, "r", encoding="utf-8") as f:
             for line in f:
                 if line.strip():
@@ -51,10 +51,29 @@ menv.Append(BUILD_FLAGS=[f"-D ADVERT_NAME=\'\"{env_name}\"\'"])
 libdeps  =f".pio/libdeps/{env_name}/"
 mc_dir = libdeps+"MeshCore/"
 
-# copy ed25519 in .pio/libdeps
-ed_dir = libdeps+"ed25519/"
-if not os.path.exists(ed_dir):
-    shutil.copytree(mc_dir+"lib/ed25519", ed_dir)
+# Add ed25519 to include path and build sources
+# This is needed because library.json extraScript doesn't work for dependencies
+ed25519_src_dir = mc_dir+"lib/ed25519"
+nrf52_include_dir = mc_dir+"lib/nrf52/include"
+
+print(f"[pre_build] Adding ed25519 include: {ed25519_src_dir}")
+# Use BUILD_FLAGS with -I to ensure it propagates to library builds
+menv.Append(BUILD_FLAGS=[f"-I {ed25519_src_dir}"])
+menv.Append(CPPPATH=[ed25519_src_dir])
+
+# Add nrf52 includes for NRF52_PLATFORM
+for item in menv.get("CPPDEFINES", []):
+    if item == "NRF52_PLATFORM":
+        menv.Append(BUILD_FLAGS=[f"-I {nrf52_include_dir}"])
+        menv.Append(CPPPATH=[nrf52_include_dir])
+        print(f"[pre_build] Adding NRF52 include: {nrf52_include_dir}")
+        break
+
+# Build ed25519 C files
+if os.path.exists(ed25519_src_dir):
+    from os.path import join as path_join
+    menv.BuildSources(path_join("$BUILD_DIR", "meshcore_ed25519"), ed25519_src_dir, src_filter="+<*.c>")
+    print(f"[pre_build] Building ed25519 C sources")
 
 # if STM32_PLATFORM, then get LFS wrapper
 lfs_dir = libdeps+"Adafruit_LittleFS_stm32/"

@@ -24,6 +24,34 @@
 #include <RTClib.h>
 #include <target.h>
 
+// Extended preferences for sleeping sensor (separate from core NodePrefs)
+// Stored in /com_prefs_ext to allow core NodePrefs to grow independently
+struct SensorExtendedPrefs {
+  uint16_t sleep_interval_secs;       // Sleep interval (60-3600 seconds)
+  uint8_t wakeups_per_advert;         // Wakeups between advertisements (1-255)
+  uint8_t _pad;                       // Alignment padding
+  char broadcast_zone_name[32];       // Transport zone name for selective forwarding
+  char private_channel_psk[48];       // Base64 PSK for private channels (16 or 32 bytes)
+};
+
+// Template specialization for extended prefs serialization
+template<typename T>
+struct ExtendedPrefsSerializer {
+  static bool save(FILESYSTEM* fs, const T& prefs, const char* filename = "/com_prefs_ext") {
+    return true;  // Default: no extended prefs
+  }
+  static bool load(FILESYSTEM* fs, T& prefs, const char* filename = "/com_prefs_ext") {
+    return false;  // Default: no extended prefs
+  }
+};
+
+// Specialization for SensorExtendedPrefs
+template<>
+struct ExtendedPrefsSerializer<SensorExtendedPrefs> {
+  static bool save(FILESYSTEM* fs, const SensorExtendedPrefs& prefs, const char* filename = "/com_prefs_ext");
+  static bool load(FILESYSTEM* fs, SensorExtendedPrefs& prefs, const char* filename = "/com_prefs_ext");
+};
+
 #define PERM_RESERVED1         (1 << 2)
 #define PERM_RESERVED2         (1 << 3)
 #define PERM_RESERVED3         (1 << 4)
@@ -67,7 +95,11 @@ public:
   const char* getRole() override { return FIRMWARE_ROLE; }
   const char* getNodeName() { return _prefs.node_name; }
   NodePrefs* getNodePrefs() { return &_prefs; }
-  void savePrefs() override { _cli.savePrefs(_fs); }
+  SensorExtendedPrefs* getExtendedPrefs() { return &_extended_prefs; }
+  void savePrefs() override {
+    _cli.savePrefs(_fs);  // Save core prefs
+    ExtendedPrefsSerializer<SensorExtendedPrefs>::save(_fs, _extended_prefs);  // Save extended prefs
+  }
   bool formatFileSystem() override;
   void sendSelfAdvertisement(int delay_millis) override;
   void broadcastTelemetry();  // Broadcast sensor data via group message
@@ -143,6 +175,7 @@ private:
   FILESYSTEM* _fs;
   // next_local_advert, next_flood_advert removed - time-based ads incompatible with sleeping nodes
   NodePrefs _prefs;
+  SensorExtendedPrefs _extended_prefs;  // Extended preferences in separate file
   CommonCLI _cli;
   uint8_t reply_data[MAX_PACKET_PAYLOAD];
   ClientACL  acl;

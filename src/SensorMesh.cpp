@@ -2,6 +2,62 @@
 #include <SHA256.h>
 #include <base64.hpp>
 
+/* ------------------------------ Extended Prefs Serialization -------------------------------- */
+
+// Implementation of ExtendedPrefsSerializer for SensorExtendedPrefs
+bool ExtendedPrefsSerializer<SensorExtendedPrefs>::save(FILESYSTEM* fs, const SensorExtendedPrefs& prefs, const char* filename) {
+  #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+    fs->remove(filename);
+    File file = fs->open(filename, FILE_O_WRITE);
+  #elif defined(RP2040_PLATFORM)
+    File file = fs->open(filename, "w");
+  #else
+    File file = fs->open(filename, "w", true);
+  #endif
+
+  if (!file) return false;
+
+  // Write fields with explicit ordering (84 bytes total)
+  file.write((uint8_t*)&prefs.sleep_interval_secs, sizeof(prefs.sleep_interval_secs));  // 0-1
+  file.write((uint8_t*)&prefs.wakeups_per_advert, sizeof(prefs.wakeups_per_advert));    // 2
+  file.write((uint8_t*)&prefs._pad, 1);                                                  // 3 (padding)
+  file.write((uint8_t*)&prefs.broadcast_zone_name, sizeof(prefs.broadcast_zone_name));  // 4-35
+  file.write((uint8_t*)&prefs.private_channel_psk, sizeof(prefs.private_channel_psk));  // 36-83
+
+  file.close();
+  return true;
+}
+
+bool ExtendedPrefsSerializer<SensorExtendedPrefs>::load(FILESYSTEM* fs, SensorExtendedPrefs& prefs, const char* filename) {
+  if (!fs->exists(filename)) {
+    // No extended prefs file, use defaults (already set in constructor)
+    return false;
+  }
+
+  #if defined(RP2040_PLATFORM)
+    File file = fs->open(filename, "r");
+  #else
+    File file = fs->open(filename);
+  #endif
+
+  if (!file) return false;
+
+  // Read fields in same order as save
+  file.read((uint8_t*)&prefs.sleep_interval_secs, sizeof(prefs.sleep_interval_secs));
+  file.read((uint8_t*)&prefs.wakeups_per_advert, sizeof(prefs.wakeups_per_advert));
+  uint8_t pad;
+  file.read(&pad, 1);  // padding
+  file.read((uint8_t*)&prefs.broadcast_zone_name, sizeof(prefs.broadcast_zone_name));
+  file.read((uint8_t*)&prefs.private_channel_psk, sizeof(prefs.private_channel_psk));
+
+  // Sanitize values to valid ranges
+  prefs.sleep_interval_secs = constrain(prefs.sleep_interval_secs, 60, 3600);
+  prefs.wakeups_per_advert = constrain(prefs.wakeups_per_advert, 1, 255);
+
+  file.close();
+  return true;
+}
+
 /* ------------------------------ Config -------------------------------- */
 
 #ifndef LORA_FREQ
@@ -213,8 +269,8 @@ uint32_t SensorMesh::getDirectRetransmitDelay(const mesh::Packet* packet) {
 }
 
 int SensorMesh::getSleepInterval() {
-  if (!_prefs.sleep_interval_secs) return 300;
-  return _prefs.sleep_interval_secs;
+  if (!_extended_prefs.sleep_interval_secs) return 300;
+  return _extended_prefs.sleep_interval_secs;
 }
 
 int SensorMesh::getInterferenceThreshold() const {
@@ -375,18 +431,18 @@ void SensorMesh::handleCommand(uint32_t sender_timestamp, char* command, char* r
       const char* psk_arg = &subcmd[4];
       if (strlen(psk_arg) == 0) {
         strcpy(reply, "Err - PSK required (base64-encoded 16 or 32 bytes)");
-      } else if (strlen(psk_arg) >= sizeof(_prefs.private_channel_psk)) {
+      } else if (strlen(psk_arg) >= sizeof(_extended_prefs.private_channel_psk)) {
         strcpy(reply, "Err - PSK too long (max 47 chars)");
       } else {
         // Attempt to set private channel (validates PSK internally)
-        int len_before = strlen(_prefs.private_channel_psk);
+        int len_before = strlen(_extended_prefs.private_channel_psk);
         setPrivateChannel(psk_arg);
 
         if (private_channel_enabled) {
           // Extract key length from preferences (decode to check)
           uint8_t temp[32];
-          int decoded_len = decode_base64((unsigned char*)_prefs.private_channel_psk,
-                                          strlen(_prefs.private_channel_psk), temp);
+          int decoded_len = decode_base64((unsigned char*)_extended_prefs.private_channel_psk,
+                                          strlen(_extended_prefs.private_channel_psk), temp);
           sprintf(reply, "Private channel enabled (%d-bit key)", decoded_len * 8);
         } else {
           strcpy(reply, "Err - Invalid PSK (must be base64-encoded 16 or 32 bytes)");
@@ -418,13 +474,13 @@ void SensorMesh::handleCommand(uint32_t sender_timestamp, char* command, char* r
       if (secs < 60 || secs > 3600) {
         strcpy(reply, "Err - sleep interval must be 60-3600 seconds");
       } else {
-        _prefs.sleep_interval_secs = (uint16_t)secs;
+        _extended_prefs.sleep_interval_secs = (uint16_t)secs;
         savePrefs();
         sprintf(reply, "Sleep interval set: %d seconds", secs);
       }
     } else if (strcmp(subcmd, "status") == 0 || strcmp(subcmd, "info") == 0) {
       // sleep status
-      sprintf(reply, "Sleep interval: %d seconds", _prefs.sleep_interval_secs);
+      sprintf(reply, "Sleep interval: %d seconds", _extended_prefs.sleep_interval_secs);
     } else {
       strcpy(reply, "Usage: sleep set <seconds> | sleep status");
     }
@@ -437,14 +493,14 @@ void SensorMesh::handleCommand(uint32_t sender_timestamp, char* command, char* r
       if (count < 1 || count > 255) {
         strcpy(reply, "Err - wakeups per advert must be 1-255");
       } else {
-        _prefs.wakeups_per_advert = (uint8_t)count;
+        _extended_prefs.wakeups_per_advert = (uint8_t)count;
         savePrefs();
         sprintf(reply, "Wakeups per advert set: %d", count);
       }
     } else if (strcmp(subcmd, "status") == 0 || strcmp(subcmd, "info") == 0) {
       // advert status
-      uint32_t interval_mins = (_prefs.sleep_interval_secs * _prefs.wakeups_per_advert) / 60;
-      sprintf(reply, "Wakeups per advert: %d (~%d mins)", _prefs.wakeups_per_advert, interval_mins);
+      uint32_t interval_mins = (_extended_prefs.sleep_interval_secs * _extended_prefs.wakeups_per_advert) / 60;
+      sprintf(reply, "Wakeups per advert: %d (~%d mins)", _extended_prefs.wakeups_per_advert, interval_mins);
     } else {
       strcpy(reply, "Usage: advert set <count> | advert status");
     }
@@ -709,18 +765,21 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
 
   // GPS defaults
   _prefs.gps_enabled = 0;
-
-  // Sleeping sensor defaults
-  _prefs.sleep_interval_secs = 300;  // 5 minutes
-  _prefs.wakeups_per_advert = 12;    // 12 wakeups = 60 minutes at 5-minute intervals
   _prefs.gps_interval = 0;
   _prefs.advert_loc_policy = ADVERT_LOC_PREFS;
 
+  // Extended preferences defaults (stored in /com_prefs_ext)
+  memset(&_extended_prefs, 0, sizeof(_extended_prefs));
+
+  // Sleeping sensor defaults
+  _extended_prefs.sleep_interval_secs = 300;  // 5 minutes
+  _extended_prefs.wakeups_per_advert = 12;    // 12 wakeups = 60 minutes at 5-minute intervals
+
   // Transport code zone defaults
-  StrHelper::strncpy(_prefs.broadcast_zone_name, DEFAULT_BROADCAST_ZONE, sizeof(_prefs.broadcast_zone_name));
+  StrHelper::strncpy(_extended_prefs.broadcast_zone_name, DEFAULT_BROADCAST_ZONE, sizeof(_extended_prefs.broadcast_zone_name));
 
   // Private channel defaults
-  _prefs.private_channel_psk[0] = 0;  // No private channel by default
+  _extended_prefs.private_channel_psk[0] = 0;  // No private channel by default
   private_channel_enabled = false;
   memset(&private_channel, 0, sizeof(private_channel));
 }
@@ -728,8 +787,12 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
 void SensorMesh::begin(FILESYSTEM* fs) {
   mesh::Mesh::begin();
   _fs = fs;
-  // load persisted prefs
+
+  // Load persisted core prefs
   _cli.loadPrefs(_fs);
+
+  // Load persisted extended prefs (if file exists, otherwise uses defaults from constructor)
+  ExtendedPrefsSerializer<SensorExtendedPrefs>::load(_fs, _extended_prefs);
 
   acl.load(_fs);
 
@@ -740,19 +803,19 @@ void SensorMesh::begin(FILESYSTEM* fs) {
   applyGpsPrefs();
 #endif
 
-  // Load persisted broadcast zone from preferences
+  // Load persisted broadcast zone from extended preferences
   // If persisted zone exists, use it; otherwise fall back to DEFAULT_BROADCAST_ZONE
-  if (strlen(_prefs.broadcast_zone_name) > 0) {
-    setBroadcastZone(_prefs.broadcast_zone_name);
-    MESH_DEBUG_PRINTLN("Loaded persisted zone: %s", _prefs.broadcast_zone_name);
+  if (strlen(_extended_prefs.broadcast_zone_name) > 0) {
+    setBroadcastZone(_extended_prefs.broadcast_zone_name);
+    MESH_DEBUG_PRINTLN("Loaded persisted zone: %s", _extended_prefs.broadcast_zone_name);
   } else {
     clearBroadcastZone();
     MESH_DEBUG_PRINTLN("No persisted zone, using standard flood");
   }
 
-  // Load persisted private channel from preferences
-  if (strlen(_prefs.private_channel_psk) > 0) {
-    setPrivateChannel(_prefs.private_channel_psk);
+  // Load persisted private channel from extended preferences
+  if (strlen(_extended_prefs.private_channel_psk) > 0) {
+    setPrivateChannel(_extended_prefs.private_channel_psk);
     MESH_DEBUG_PRINTLN("Loaded private channel from preferences");
   } else {
     clearPrivateChannel();
@@ -963,9 +1026,9 @@ void SensorMesh::setBroadcastZone(const char* name) {
   sha.update(name, strlen(name));
   sha.finalize(broadcast_zone.key, sizeof(broadcast_zone.key));
 
-  // Persist zone name to preferences
-  strncpy(_prefs.broadcast_zone_name, zone_name, sizeof(_prefs.broadcast_zone_name) - 1);
-  _prefs.broadcast_zone_name[sizeof(_prefs.broadcast_zone_name) - 1] = 0;
+  // Persist zone name to extended preferences
+  strncpy(_extended_prefs.broadcast_zone_name, zone_name, sizeof(_extended_prefs.broadcast_zone_name) - 1);
+  _extended_prefs.broadcast_zone_name[sizeof(_extended_prefs.broadcast_zone_name) - 1] = 0;
   savePrefs();  // Save to filesystem
 
   MESH_DEBUG_PRINTLN("Broadcast zone set to: %s (persisted)", zone_name);
@@ -975,8 +1038,8 @@ void SensorMesh::clearBroadcastZone() {
   zone_name[0] = 0;
   memset(broadcast_zone.key, 0, sizeof(broadcast_zone.key));
 
-  // Persist cleared state to preferences
-  _prefs.broadcast_zone_name[0] = 0;
+  // Persist cleared state to extended preferences
+  _extended_prefs.broadcast_zone_name[0] = 0;
   savePrefs();  // Save to filesystem
 
   MESH_DEBUG_PRINTLN("Broadcast zone cleared (using standard flood, persisted)");
@@ -1020,9 +1083,9 @@ void SensorMesh::setPrivateChannel(const char* psk_base64) {
   // Enable private channel
   private_channel_enabled = true;
 
-  // Persist to preferences
-  strncpy(_prefs.private_channel_psk, psk_base64, sizeof(_prefs.private_channel_psk) - 1);
-  _prefs.private_channel_psk[sizeof(_prefs.private_channel_psk) - 1] = 0;
+  // Persist to extended preferences
+  strncpy(_extended_prefs.private_channel_psk, psk_base64, sizeof(_extended_prefs.private_channel_psk) - 1);
+  _extended_prefs.private_channel_psk[sizeof(_extended_prefs.private_channel_psk) - 1] = 0;
   savePrefs();  // Save to filesystem
 
   MESH_DEBUG_PRINTLN("Private channel enabled (%d-bit key, persisted)", decoded_len * 8);
@@ -1032,8 +1095,8 @@ void SensorMesh::clearPrivateChannel() {
   private_channel_enabled = false;
   memset(&private_channel, 0, sizeof(private_channel));
 
-  // Persist cleared state to preferences
-  _prefs.private_channel_psk[0] = 0;
+  // Persist cleared state to extended preferences
+  _extended_prefs.private_channel_psk[0] = 0;
   savePrefs();  // Save to filesystem
 
   MESH_DEBUG_PRINTLN("Private channel disabled (using public broadcast, persisted)");

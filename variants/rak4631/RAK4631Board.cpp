@@ -5,6 +5,9 @@
 #include <bluefruit.h>
 #include <Wire.h>
 
+// Custom startup reason for RTC-based wakeup (not in core MeshCore)
+#define BD_STARTUP_RTC_WAKEUP  2
+
 static BLEDfu bledfu;
 
 static void connect_callback(uint16_t conn_handle) {
