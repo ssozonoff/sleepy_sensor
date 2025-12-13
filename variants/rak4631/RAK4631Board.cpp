@@ -1,12 +1,10 @@
 #include <Arduino.h>
 #include "RAK4631Board.h"
 #include "DS3231Wakeup.h"
+#include "RV3028Wakeup.h"
 
 #include <bluefruit.h>
 #include <Wire.h>
-
-// Custom startup reason for RTC-based wakeup (not in core MeshCore)
-#define BD_STARTUP_RTC_WAKEUP  2
 
 static BLEDfu bledfu;
 
@@ -25,25 +23,66 @@ static void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
 void RAK4631Board::begin() {
   MESH_DEBUG_PRINTLN("\n=== Board Startup Debug ===");
 
+#if defined(PIN_BOARD_SDA) && defined(PIN_BOARD_SCL)
+  Wire.setPins(PIN_BOARD_SDA, PIN_BOARD_SCL);
+#endif
+
   // Initialize I2C for RTC access
   Wire.begin();
 
-  // Create RTC wakeup implementation (DS3231)
+  // Now initialize RTC for future use
   if (!rtc_wakeup) {
-    rtc_wakeup = new DS3231Wakeup(&Wire, PIN_RTC_INT);
-    static_cast<DS3231Wakeup*>(rtc_wakeup)->begin();
-  }
+    MESH_DEBUG_PRINTLN("Initializing RTC wakeup...");
 
-  // Check if wakeup was triggered by RTC alarm
-  if (rtc_wakeup->checkWakeup()) {
-    startup_reason = BD_STARTUP_RTC_WAKEUP;
-    MESH_DEBUG_PRINTLN("RTC alarm triggered - RTC_WAKEUP");
-  } else {
-    startup_reason = BD_STARTUP_NORMAL;
-    MESH_DEBUG_PRINTLN("No RTC alarm - NORMAL startup");
-  }
+    #ifdef FORCE_RTC_DS3231
+      // Compile-time forced DS3231
+      MESH_DEBUG_PRINTLN("Using DS3231 (compile-time forced)");
+      rtc_wakeup = new DS3231Wakeup(&Wire, PIN_RTC_INT);
+      static_cast<DS3231Wakeup*>(rtc_wakeup)->begin();
 
-  MESH_DEBUG_PRINTLN("=== Board Startup Complete ===\n");
+    #elif defined(FORCE_RTC_RV3028)
+      // Compile-time forced RV-3028
+      MESH_DEBUG_PRINTLN("Using RV-3028 (compile-time forced)");
+      rtc_wakeup = new RV3028Wakeup(&Wire, PIN_RTC_INT);
+      if (!static_cast<RV3028Wakeup*>(rtc_wakeup)->begin()) {
+        MESH_DEBUG_PRINTLN("ERROR: RV-3028 initialization failed!");
+        delete rtc_wakeup;
+        rtc_wakeup = nullptr;
+      }
+
+    #else
+      // Runtime auto-detection (default)
+      MESH_DEBUG_PRINTLN("Auto-detecting RTC type...");
+
+      // Try RV-3028 first (address 0x52)
+      Wire.beginTransmission(0x52);
+      if (Wire.endTransmission() == 0) {
+        MESH_DEBUG_PRINTLN("RV-3028 detected at 0x52");
+        rtc_wakeup = new RV3028Wakeup(&Wire, PIN_RTC_INT);
+        if (!static_cast<RV3028Wakeup*>(rtc_wakeup)->begin()) {
+          MESH_DEBUG_PRINTLN("RV-3028 init failed, trying DS3231...");
+          delete rtc_wakeup;
+          rtc_wakeup = nullptr;
+        }
+      }
+
+      // Try DS3231 if RV-3028 not found (address 0x68)
+      if (!rtc_wakeup) {
+        Wire.beginTransmission(0x68);
+        if (Wire.endTransmission() == 0) {
+          MESH_DEBUG_PRINTLN("DS3231 detected at 0x68");
+          rtc_wakeup = new DS3231Wakeup(&Wire, PIN_RTC_INT);
+          static_cast<DS3231Wakeup*>(rtc_wakeup)->begin();
+        } else {
+          MESH_DEBUG_PRINTLN("ERROR: No RTC detected!");
+        }
+      }
+    #endif
+
+    if (!rtc_wakeup) {
+      MESH_DEBUG_PRINTLN("FATAL: RTC wakeup initialization failed!");
+    }
+  }
 
   pinMode(PIN_VBAT_READ, INPUT);
 #ifdef PIN_USER_BTN
@@ -54,20 +93,23 @@ void RAK4631Board::begin() {
   pinMode(PIN_USER_BTN_ANA, INPUT_PULLUP);
 #endif
 
-#if defined(PIN_BOARD_SDA) && defined(PIN_BOARD_SCL)
-  Wire.setPins(PIN_BOARD_SDA, PIN_BOARD_SCL);
-#endif
-
-  Wire.begin();
-
   pinMode(SX126X_POWER_EN, OUTPUT);
   digitalWrite(SX126X_POWER_EN, HIGH);
   delay(10);   // give sx1262 some time to power up
 
   // Enable 3V3_S power rail for WisBlock sensor modules
-  // LOW = 3V3_S ON (P-channel MOSFET)
+  // LOW = 3V3_S OFF 
+  MESH_DEBUG_PRINTLN("Enabling switched 3V3 for sensor slots");
   pinMode(PIN_3V3_S_EN, OUTPUT);
-  digitalWrite(PIN_3V3_S_EN, LOW);
+  digitalWrite(PIN_3V3_S_EN, HIGH);
+  delay(50);
+
+  MESH_DEBUG_PRINTLN("=== Board Startup Complete ===\n");
+}
+
+void RAK4631Board::powerUpPeripherals() {
+  MESH_DEBUG_PRINTLN("Power on switched 3V3 for sensor slots (HIGH)");
+  digitalWrite(PIN_3V3_S_EN, HIGH);
 }
 
 void RAK4631Board::powerDownPeripherals() {
@@ -83,10 +125,11 @@ void RAK4631Board::powerDownPeripherals() {
   #endif
 
   // Power down 3V3_S rail (all WisBlock sensor modules)
-  // HIGH = 3V3_S OFF (P-channel MOSFET gate pulled high)
+  // LOW = 3V3_S OFF (P-channel MOSFET gate pulled high)
   // Note: RAK12002 RTC module is powered from main 3V3 rail, not 3V3_S,
-  // so it continues to run and can generate wake-up interrupts
-  digitalWrite(PIN_3V3_S_EN, HIGH);
+  // so it continues to run and can generate wake-up interrupts  
+  MESH_DEBUG_PRINTLN("Power off switched 3V3 for sensor slots (LOW)");
+  digitalWrite(PIN_3V3_S_EN, LOW);
 
   // Put GPS to sleep if present
   // (handled by sensor manager)
@@ -97,23 +140,26 @@ void RAK4631Board::enterLowPowerSleep(uint32_t sleep_seconds) {
 
   // Setup RTC alarm for wakeup
   if (rtc_wakeup) {
-    rtc_wakeup->setAlarm(sleep_seconds);
+    if (!rtc_wakeup->setAlarm(sleep_seconds)) {
+      MESH_DEBUG_PRINTLN("ERROR: Failed to set RTC alarm!");
+      return;  // Don't enter sleep if alarm setup failed
+    }
   } else {
     MESH_DEBUG_PRINTLN("ERROR: RTC wakeup not initialized!");
     return;
   }
 
-  // Configure nRF52 to wake on RTC interrupt (active LOW)
+  // Configure nRF52 to wake on RTC interrupt (active LOW) on primary pin
   nrf_gpio_cfg_sense_input(PIN_RTC_INT, NRF_GPIO_PIN_PULLUP,
                            NRF_GPIO_PIN_SENSE_LOW);
-  MESH_DEBUG_PRINTLN("nRF52 GPIO sense configured on pin %d (active LOW)", PIN_RTC_INT);
-
-  // Power down peripherals
-  powerDownPeripherals();
+  MESH_DEBUG_PRINTLN("PIN_RTC_INT (GPIO %d) configured for wake", PIN_RTC_INT);
 
   MESH_DEBUG_PRINTLN("Entering system-off mode...");
   Serial.flush();  // Ensure all serial data is sent
   delay(100);      // Give time for serial transmission
+
+  // Power down peripherals (this will drive GPIO 34 LOW for 3V3_S control)
+  powerDownPeripherals();
 
   // Enter system-off mode directly (no SoftDevice dependency)
   // The GPIO sense configuration will wake the system on RTC alarm

@@ -10,6 +10,14 @@
 #define DS3231_CONTROL_REG 0x0E
 #define DS3231_ALARM1_BASE 0x07
 
+// DS3231 Register Addresses
+#define DS3231_REG_CONTROL      0x0E
+#define DS3231_REG_STATUS       0x0F
+#define DS3231_REG_ALARM1_SEC   0x07
+#define DS3231_REG_ALARM1_MIN   0x08
+#define DS3231_REG_ALARM1_HOUR  0x09
+#define DS3231_REG_ALARM1_DAY   0x0A
+
 /**
  * DS3231 Real-Time Clock wakeup implementation
  *

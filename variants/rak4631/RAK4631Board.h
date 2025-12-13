@@ -25,23 +25,9 @@
 #define SX126X_DIO2_AS_RF_SWITCH  true
 #define SX126X_DIO3_TCXO_VOLTAGE   1.8
 
-// DS3231 RTC Module
-// Default to Slot A, change based on your physical slot
-#define PIN_RTC_INT     WB_IO1  // GPIO 17 for Slot A (SQW/INT pin)
-// Alternative slots:
-// Slot B: WB_IO2 (34)
-// Slot C: WB_IO3 (21) or WB_IO4 (4)
-// Slot D: WB_IO5 (9) or WB_IO6 (10)
-
-#define DS3231_I2C_ADDRESS  0x68
-
-// DS3231 Register Addresses
-#define DS3231_REG_CONTROL      0x0E
-#define DS3231_REG_STATUS       0x0F
-#define DS3231_REG_ALARM1_SEC   0x07
-#define DS3231_REG_ALARM1_MIN   0x08
-#define DS3231_REG_ALARM1_HOUR  0x09
-#define DS3231_REG_ALARM1_DAY   0x0A
+// RTC Module
+// Default to Slot D, change based on your physical slot
+#define PIN_RTC_INT     WB_IO4 // Slot C pin 10  
 
 // 3V3_S power control (WisBlock sensor modules)
 // WB_IO2 controls P-channel MOSFET: HIGH = 3V3_S OFF, LOW = 3V3_S ON
@@ -87,6 +73,7 @@ public:
 
   void enterLowPowerSleep(uint32_t sleep_seconds);
   void powerDownPeripherals();
+  void powerUpPeripherals();
 
   // Access to RTC wakeup implementation (for testing/configuration)
   RTCWakeup* getRTCWakeup() { return rtc_wakeup; }

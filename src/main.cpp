@@ -5,7 +5,7 @@
 // ============================================================
 
 // Standard Telemetry Channels (1-9) - Reserved for system/framework
-#define TELEM_CHANNEL_BATTERY       1   // Battery voltage
+#define TELEM_CHANNEL_BATTERY       10   // Battery voltage
 
 // Application Telemetry Channels (10+) - CUSTOMIZE THIS SECTION
 // Define your sensor channels here
@@ -99,6 +99,7 @@ void broadcastApplicationTelemetry() {
   // EXAMPLE
   // as an example this will add any data from currently supported sensors (EnvironmentSensorManager) to the CayenneLPP packet.
   // since this is a push bashed sensor the permissions byte is irrelevant so enable all permissions
+  MESH_DEBUG_PRINTLN("About to call querySensors");
   sensors.querySensors(0xFF, telemetry);
 
   // Example 1: I2C Temperature/Humidity Sensor (BME280, SHT31, etc.)
@@ -194,7 +195,7 @@ void broadcastApplicationTelemetry() {
 
 // Configuration constants (can be moved to preferences later)
 static const uint32_t SAMPLE_INTERVAL_MS = 1000;           // 1 second between samples
-static const uint8_t NUM_SAMPLES = 10;                      // Number of samples to collect
+static const uint8_t NUM_SAMPLES = 5;                      // Number of samples to collect
 static const uint32_t MAX_AWAKE_TIME_MS = 5 * 60 * 1000;  // 5 minutes max
 
 static SensorNodeState current_state = SAMPLING;
@@ -236,7 +237,6 @@ void setup() {
   board.begin();
   MESH_DEBUG_PRINTLN("board.begin() completed");
 
-  //TODO: This is too specific to the DS3231, this should refactored to an interface
   // Load wakeup counter from GPREGRET2 (persists across sleep, resets on power cycle)
   MESH_DEBUG_PRINTLN("Loading wakeup counter...");
   wakeup_count = NRF_POWER->GPREGRET2;

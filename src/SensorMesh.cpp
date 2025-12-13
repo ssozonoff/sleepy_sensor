@@ -789,10 +789,46 @@ void SensorMesh::begin(FILESYSTEM* fs) {
   _fs = fs;
 
   // Load persisted core prefs
+  MESH_DEBUG_PRINTLN("=== Preference Loading Debug ===");
+  MESH_DEBUG_PRINTLN("Checking for /com_prefs file...");
+  if (_fs->exists("/com_prefs")) {
+    MESH_DEBUG_PRINTLN("/com_prefs found");
+  } else {
+    MESH_DEBUG_PRINTLN("WARNING: /com_prefs NOT found - will use build-time defaults!");
+  }
+
+  MESH_DEBUG_PRINTLN("Build-time defaults: freq=%.3f bw=%.1f sf=%d cr=%d",
+                     LORA_FREQ, LORA_BW, LORA_SF, LORA_CR);
+
   _cli.loadPrefs(_fs);
 
+  MESH_DEBUG_PRINTLN("Loaded radio params: freq=%.3f bw=%.1f sf=%d cr=%d",
+                     _prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
+
+  // Detect silent failure by comparing to build defaults
+  if (_prefs.freq == LORA_FREQ && _prefs.bw == LORA_BW &&
+      _prefs.sf == LORA_SF && _prefs.cr == LORA_CR) {
+    MESH_DEBUG_PRINTLN("NOTE: Radio params match build-time defaults - either first boot or load failed");
+  }
+  MESH_DEBUG_PRINTLN("=== End Preference Loading ===\n");
+
   // Load persisted extended prefs (if file exists, otherwise uses defaults from constructor)
-  ExtendedPrefsSerializer<SensorExtendedPrefs>::load(_fs, _extended_prefs);
+  MESH_DEBUG_PRINTLN("=== Extended Preference Loading ===");
+  if (_fs->exists("/com_prefs_ext")) {
+    MESH_DEBUG_PRINTLN("/com_prefs_ext found");
+    if (ExtendedPrefsSerializer<SensorExtendedPrefs>::load(_fs, _extended_prefs)) {
+      MESH_DEBUG_PRINTLN("Extended prefs loaded successfully");
+    } else {
+      MESH_DEBUG_PRINTLN("WARNING: Extended prefs load FAILED!");
+    }
+  } else {
+    MESH_DEBUG_PRINTLN("NOTE: /com_prefs_ext not found - using defaults");
+    ExtendedPrefsSerializer<SensorExtendedPrefs>::load(_fs, _extended_prefs);
+  }
+  MESH_DEBUG_PRINTLN("Sleep interval: %d secs, Wakeups per advert: %d",
+                     _extended_prefs.sleep_interval_secs,
+                     _extended_prefs.wakeups_per_advert);
+  MESH_DEBUG_PRINTLN("=== End Extended Prefs ===\n");
 
   acl.load(_fs);
 
@@ -821,6 +857,15 @@ void SensorMesh::begin(FILESYSTEM* fs) {
     clearPrivateChannel();
     MESH_DEBUG_PRINTLN("No private channel configured, using public broadcast");
   }
+}
+
+void SensorMesh::savePrefs() {
+  MESH_DEBUG_PRINTLN("Saving preferences...");
+  MESH_DEBUG_PRINTLN("Radio params to save: freq=%.3f bw=%.1f sf=%d cr=%d",
+                     _prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
+  _cli.savePrefs(_fs);  // Save core prefs
+  ExtendedPrefsSerializer<SensorExtendedPrefs>::save(_fs, _extended_prefs);  // Save extended prefs
+  MESH_DEBUG_PRINTLN("Preferences saved");
 }
 
 bool SensorMesh::formatFileSystem() {

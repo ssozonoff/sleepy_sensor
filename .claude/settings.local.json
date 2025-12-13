@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(~/.platformio/penv/bin/platformio run:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(chmod:*)"
     ]
   }
 }

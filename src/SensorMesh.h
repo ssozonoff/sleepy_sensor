@@ -96,10 +96,7 @@ public:
   const char* getNodeName() { return _prefs.node_name; }
   NodePrefs* getNodePrefs() { return &_prefs; }
   SensorExtendedPrefs* getExtendedPrefs() { return &_extended_prefs; }
-  void savePrefs() override {
-    _cli.savePrefs(_fs);  // Save core prefs
-    ExtendedPrefsSerializer<SensorExtendedPrefs>::save(_fs, _extended_prefs);  // Save extended prefs
-  }
+  void savePrefs() override;
   bool formatFileSystem() override;
   void sendSelfAdvertisement(int delay_millis) override;
   void broadcastTelemetry();  // Broadcast sensor data via group message
