@@ -268,8 +268,8 @@ uint32_t SensorMesh::getDirectRetransmitDelay(const mesh::Packet* packet) {
   return getRNG()->nextInt(0, 6)*t;
 }
 
-int SensorMesh::getSleepInterval() {
-  if (!_extended_prefs.sleep_interval_secs) return 300;
+int SensorMesh::getSleepInterval(uint8_t default_value) {
+  if (!_extended_prefs.sleep_interval_secs) return default_value;
   return _extended_prefs.sleep_interval_secs;
 }
 

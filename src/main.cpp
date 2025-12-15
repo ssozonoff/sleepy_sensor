@@ -196,14 +196,15 @@ void broadcastApplicationTelemetry() {
 // Configuration constants (can be moved to preferences later)
 static const uint32_t SAMPLE_INTERVAL_MS = 1000;           // 1 second between samples
 static const uint8_t NUM_SAMPLES = 5;                      // Number of samples to collect
-static const uint32_t MAX_AWAKE_TIME_MS = 5 * 60 * 1000;  // 5 minutes max
+static const uint32_t MAX_AWAKE_TIME_MS = 1 * 60 * 1000;  // 5 minutes max
+static const uint8_t DEFAULT_SLEEP_TIME_SECONDS = 60 * 15; // 15 min default sleep time
 
 static SensorNodeState current_state = SAMPLING;
 static uint32_t state_start_time = 0;
 static uint32_t awake_start_time = 0;
 static uint8_t wakeup_count = 0;
 static uint32_t last_interactive_activity = 0;  // Track last command received
-static const uint32_t INTERACTIVE_TIMEOUT_MS = 5 * 60 * 1000;  // Exit interactive mode after 60s of inactivity
+static const uint32_t INTERACTIVE_TIMEOUT_MS = 5 * 60 * 1000;  // Exit interactive mode after 300s of inactivity
 
 // Sampling state variables
 static float sensor_samples[NUM_SAMPLES];
@@ -467,7 +468,7 @@ void loop() {
       digitalWrite(LED_BUILTIN, LOW);
       delay(100);
 
-      board.enterLowPowerSleep(the_mesh.getSleepInterval());
+      board.enterLowPowerSleep(the_mesh.getSleepInterval(DEFAULT_SLEEP_TIME_SECONDS));
       // Never returns
       break;
     }
