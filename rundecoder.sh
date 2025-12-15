@@ -1,0 +1,2 @@
+# TODO activate the venv if needed
+python3 mqtt_listener.py -P 8883 -u meshcore -p Ilove2Mesh-123  -t meshcore/GVA/3DF38C372AF1AC2C273053771008635495D085C3BF779395E67611F56B1B6A73/packets --tls --tls-insecure i6u8iy.stackhero-network.com
